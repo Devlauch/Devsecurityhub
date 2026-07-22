@@ -7,6 +7,16 @@
     <style>
       * { box-sizing: border-box; margin: 0; padding: 0; }
       body { background: #0d1117; color: #e6edf3; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; }
+
+      @keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
+      @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.4; } }
+      @keyframes glow { 0%, 100% { box-shadow: 0 0 0 0 rgba(56,139,253,0.5); } 50% { box-shadow: 0 0 0 7px rgba(56,139,253,0); } }
+      @keyframes slideUp { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
+      @keyframes stagePulse { 0%, 100% { background: rgba(56,139,253,0.1); border-color: rgba(56,139,253,0.4); } 50% { background: rgba(56,139,253,0.25); border-color: rgba(56,139,253,0.9); } }
+      @keyframes progressSlide { from { width: 3%; } to { width: 92%; } }
+      @keyframes runDot { 0%, 100% { transform: scale(1); opacity: 1; } 50% { transform: scale(1.5); opacity: 0.6; } }
+      @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
+      @keyframes shimmer { 0% { background-position: -400px 0; } 100% { background-position: 400px 0; } }
     </style>
   </head>
   <body>

@@ -3,26 +3,36 @@ import { useParams, useNavigate } from 'react-router-dom';
 import api from '../api/client';
 
 const TABS = [
-  { id: 'gitleaks', label: '🔑 Secrets (Gitleaks)' },
-  { id: 'semgrep', label: '🔍 SAST (SonarQube)' },
-  { id: 'owasp', label: '📦 Dependencies (Trivy FS)' },
-  { id: 'trivy', label: '🐳 Container (Trivy)' },
-  { id: 'checkov', label: '🏗️ IaC (Checkov)' },
+  { id: 'gitleaks', label: '🔑 Secrets' },
+  { id: 'semgrep', label: '🔍 SAST' },
+  { id: 'owasp', label: '📦 Dependencies' },
+  { id: 'trivy', label: '🐳 Container' },
+  { id: 'checkov', label: '🏗️ IaC' },
   { id: 'ai', label: '✨ AI Summary' },
+];
+
+const PIPELINE_STAGES = [
+  { id: 'checkout', label: 'Checkout', icon: '📥', endSec: 15 },
+  { id: 'setup', label: 'Setup Tools', icon: '🔧', endSec: 60 },
+  { id: 'gitleaks', label: 'Gitleaks', icon: '🔑', endSec: 130 },
+  { id: 'sonarqube', label: 'SonarQube', icon: '🔍', endSec: 220 },
+  { id: 'trivy-fs', label: 'Trivy FS', icon: '📦', endSec: 290 },
+  { id: 'checkov', label: 'Checkov', icon: '🏗️', endSec: 360 },
+  { id: 'container', label: 'Container', icon: '🐳', endSec: 460, dockerOnly: true },
 ];
 
 const S = {
   page: { padding: 32 },
-  header: { marginBottom: 28 },
-  back: { color: '#8b949e', fontSize: 13, cursor: 'pointer', marginBottom: 12, background: 'none', border: 'none', padding: 0 },
+  header: { marginBottom: 24 },
+  back: { color: '#8b949e', fontSize: 13, cursor: 'pointer', marginBottom: 14, background: 'none', border: 'none', padding: 0, display: 'flex', alignItems: 'center', gap: 4 },
   h1: { fontSize: 20, fontWeight: 700, color: '#e6edf3', marginBottom: 6 },
-  meta: { display: 'flex', gap: 16, alignItems: 'center', flexWrap: 'wrap' },
-  branch: { background: '#21262d', border: '1px solid #30363d', borderRadius: 4, padding: '2px 8px', fontSize: 12, color: '#8b949e' },
-  status: { display: 'inline-block', padding: '3px 12px', borderRadius: 12, fontSize: 12, fontWeight: 600 },
-  running: { background: 'rgba(56,139,253,0.2)', color: '#388bfd' },
-  done: { background: 'rgba(63,185,80,0.2)', color: '#3fb950' },
-  failed: { background: 'rgba(248,81,73,0.2)', color: '#f85149' },
-  pending: { background: 'rgba(139,148,158,0.2)', color: '#8b949e' },
+  meta: { display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap' },
+  branch: { background: '#21262d', border: '1px solid #30363d', borderRadius: 4, padding: '2px 10px', fontSize: 12, color: '#8b949e' },
+  status: { display: 'inline-flex', alignItems: 'center', gap: 6, padding: '3px 12px', borderRadius: 12, fontSize: 12, fontWeight: 600 },
+  running: { background: 'rgba(56,139,253,0.15)', color: '#388bfd', border: '1px solid rgba(56,139,253,0.3)' },
+  done: { background: 'rgba(63,185,80,0.15)', color: '#3fb950', border: '1px solid rgba(63,185,80,0.3)' },
+  failed: { background: 'rgba(248,81,73,0.15)', color: '#f85149', border: '1px solid rgba(248,81,73,0.3)' },
+  pending: { background: 'rgba(139,148,158,0.15)', color: '#8b949e', border: '1px solid #30363d' },
   tabs: { display: 'flex', borderBottom: '1px solid #30363d', marginBottom: 24, gap: 0, overflowX: 'auto' },
   tab: { padding: '10px 18px', cursor: 'pointer', fontSize: 13, color: '#8b949e', background: 'none', border: 'none', borderBottom: '2px solid transparent', whiteSpace: 'nowrap' },
   tabActive: { color: '#58a6ff', borderBottomColor: '#58a6ff' },
@@ -30,9 +40,8 @@ const S = {
   empty: { color: '#8b949e', fontSize: 13, padding: 20 },
   loading: { color: '#8b949e', fontSize: 13, padding: 20 },
   aiBox: { background: '#0d1117', border: '1px solid #30363d', borderRadius: 6, padding: 20, fontSize: 14, color: '#e6edf3', lineHeight: 1.8, whiteSpace: 'pre-wrap' },
-  deleteBtn: { marginLeft: 'auto', padding: '6px 14px', background: '#21262d', border: '1px solid #f85149', borderRadius: 6, color: '#f85149', fontSize: 12, cursor: 'pointer' },
   scannerStat: { display: 'flex', gap: 12, marginBottom: 20, flexWrap: 'wrap' },
-  statCard: { background: '#161b22', border: '1px solid #30363d', borderRadius: 6, padding: '12px 18px', minWidth: 120 },
+  statCard: { background: '#161b22', border: '1px solid #30363d', borderRadius: 6, padding: '12px 18px', minWidth: 110 },
   statNum: { fontSize: 24, fontWeight: 700, color: '#f85149' },
   statLabel: { fontSize: 11, color: '#8b949e', marginTop: 2 },
 };
@@ -44,16 +53,148 @@ function statusStyle(s) {
   return S.pending;
 }
 
-function parseGitleaks(content) {
-  try { return JSON.parse(content); } catch { return null; }
-}
 function parseJson(content) {
   try { return JSON.parse(content); } catch { return null; }
 }
 
+// ── Pipeline Tracker ──────────────────────────────────────────────────────────
+function PipelineTracker({ scan }) {
+  const [elapsed, setElapsed] = useState(0);
+
+  useEffect(() => {
+    const startTime = new Date(scan.created_at).getTime();
+    const tick = () => setElapsed(Math.floor((Date.now() - startTime) / 1000));
+    tick();
+    if (scan.status === 'running' || scan.status === 'pending') {
+      const iv = setInterval(tick, 1000);
+      return () => clearInterval(iv);
+    }
+  }, [scan.status, scan.created_at]);
+
+  const stages = PIPELINE_STAGES.filter(s => !s.dockerOnly || scan.has_dockerfile);
+
+  function stageStatus(stage, idx) {
+    if (scan.status === 'done') return 'done';
+    if (scan.status === 'pending') return idx === 0 ? 'running' : 'pending';
+    if (scan.status === 'failed') {
+      if (elapsed > stage.endSec) return 'done';
+      const prevEnd = stages[idx - 1]?.endSec ?? 0;
+      if (elapsed >= prevEnd) return 'failed';
+      return 'pending';
+    }
+    // running
+    if (elapsed >= stage.endSec) return 'done';
+    const prevEnd = stages[idx - 1]?.endSec ?? 0;
+    if (elapsed >= prevEnd) return 'running';
+    return 'pending';
+  }
+
+  const mins = Math.floor(elapsed / 60);
+  const secs = elapsed % 60;
+  const isActive = scan.status === 'running' || scan.status === 'pending';
+
+  return (
+    <div style={{
+      background: '#161b22',
+      border: '1px solid #30363d',
+      borderRadius: 10,
+      padding: '18px 20px',
+      marginBottom: 24,
+      animation: 'fadeIn 0.3s ease',
+    }}>
+      {/* Header */}
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 18 }}>
+        <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: '0.08em', color: '#8b949e' }}>
+          PIPELINE STAGES
+        </div>
+        <div style={{ display: 'flex', gap: 16, alignItems: 'center', fontSize: 12, color: '#8b949e' }}>
+          {scan.last_build && (
+            <span style={{ background: '#21262d', border: '1px solid #30363d', borderRadius: 4, padding: '2px 8px', fontSize: 11 }}>
+              Build #{scan.last_build}
+            </span>
+          )}
+          {isActive && (
+            <span style={{ fontVariantNumeric: 'tabular-nums' }}>
+              {mins}m {String(secs).padStart(2, '0')}s
+            </span>
+          )}
+        </div>
+      </div>
+
+      {/* Stage pills */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 0, overflowX: 'auto', paddingBottom: 2 }}>
+        {stages.map((stage, i) => {
+          const st = stageStatus(stage, i);
+          const borderColor = st === 'running' ? 'rgba(56,139,253,0.7)'
+            : st === 'done' ? 'rgba(63,185,80,0.5)'
+            : st === 'failed' ? 'rgba(248,81,73,0.5)'
+            : '#21262d';
+          const bg = st === 'running' ? 'rgba(56,139,253,0.1)'
+            : st === 'done' ? 'rgba(63,185,80,0.08)'
+            : st === 'failed' ? 'rgba(248,81,73,0.08)'
+            : 'transparent';
+          const labelColor = st === 'running' ? '#58a6ff'
+            : st === 'done' ? '#3fb950'
+            : st === 'failed' ? '#f85149'
+            : '#484f58';
+
+          return (
+            <React.Fragment key={stage.id}>
+              <div style={{
+                display: 'flex', flexDirection: 'column', alignItems: 'center',
+                minWidth: 74, padding: '8px 6px', borderRadius: 8,
+                border: `1px solid ${borderColor}`,
+                background: bg,
+                animation: st === 'running' ? 'stagePulse 2s ease-in-out infinite' : 'none',
+                transition: 'all 0.4s ease',
+                flexShrink: 0,
+              }}>
+                <div style={{ fontSize: 17, marginBottom: 5, lineHeight: 1 }}>
+                  {st === 'done'
+                    ? <span style={{ color: '#3fb950' }}>✓</span>
+                    : st === 'failed'
+                    ? <span style={{ color: '#f85149' }}>✗</span>
+                    : st === 'running'
+                    ? <span style={{ display: 'inline-block', animation: 'spin 1.2s linear infinite', color: '#388bfd' }}>⟳</span>
+                    : <span style={{ opacity: 0.35 }}>{stage.icon}</span>
+                  }
+                </div>
+                <div style={{ fontSize: 10, color: labelColor, fontWeight: st === 'running' ? 700 : 400, textAlign: 'center', whiteSpace: 'nowrap' }}>
+                  {stage.label}
+                </div>
+              </div>
+              {i < stages.length - 1 && (
+                <div style={{
+                  width: 24, height: 1, flexShrink: 0,
+                  background: st === 'done' ? 'rgba(63,185,80,0.5)' : '#21262d',
+                  transition: 'background 0.4s ease',
+                  margin: '0 1px',
+                }} />
+              )}
+            </React.Fragment>
+          );
+        })}
+      </div>
+
+      {/* Progress bar */}
+      {isActive && (
+        <div style={{ marginTop: 14, height: 3, background: '#21262d', borderRadius: 2, overflow: 'hidden' }}>
+          <div style={{
+            height: '100%',
+            background: 'linear-gradient(90deg, #1f6feb, #388bfd, #58a6ff)',
+            animation: 'progressSlide 300s linear forwards',
+            borderRadius: 2,
+          }} />
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── Report Components ─────────────────────────────────────────────────────────
 function GitleaksReport({ content }) {
   if (!content) return <div style={S.empty}>No secrets report available yet.</div>;
-  const findings = parseGitleaks(content);
+  const findings = parseJson(content);
   if (!findings || !Array.isArray(findings)) return <pre style={S.pre}>{content}</pre>;
   if (findings.length === 0) return <div style={{ ...S.empty, color: '#3fb950' }}>✓ No secrets found.</div>;
   return (
@@ -103,7 +244,6 @@ function SonarQubeReport({ content }) {
     const hotspots = parseInt(measures.security_hotspots || '0');
     const ncloc = parseInt(measures.ncloc || '0');
     const issues = data.issues?.issues || [];
-    const hasMetrics = data.measures != null;
 
     const ratingLabel = v => ({ '1': 'A', '2': 'B', '3': 'C', '4': 'D', '5': 'E' }[String(Math.round(v))] || v);
     const ratingColor = v => ({ '1': '#3fb950', '2': '#3fb950', '3': '#d29922', '4': '#f85149', '5': '#f85149' }[String(Math.round(v))] || '#8b949e');
@@ -112,76 +252,31 @@ function SonarQubeReport({ content }) {
     return (
       <div>
         <div style={{ color: '#3fb950', fontWeight: 600, marginBottom: 16, fontSize: 13 }}>✓ SonarQube Analysis Complete — {data.projectKey}</div>
-        {hasMetrics ? (
-          <>
-            <div style={S.scannerStat}>
-              <div style={S.statCard}>
-                <div style={{ ...S.statNum, color: bugs > 0 ? '#f85149' : '#3fb950' }}>{bugs}</div>
-                <div style={S.statLabel}>Bugs</div>
-              </div>
-              <div style={S.statCard}>
-                <div style={{ ...S.statNum, color: vulns > 0 ? '#f85149' : '#3fb950' }}>{vulns}</div>
-                <div style={S.statLabel}>Vulnerabilities</div>
-              </div>
-              <div style={S.statCard}>
-                <div style={{ ...S.statNum, color: codeSmells > 0 ? '#d29922' : '#3fb950' }}>{codeSmells}</div>
-                <div style={S.statLabel}>Code Smells</div>
-              </div>
-              <div style={S.statCard}>
-                <div style={{ ...S.statNum, color: hotspots > 0 ? '#d29922' : '#3fb950' }}>{hotspots}</div>
-                <div style={S.statLabel}>Hotspots</div>
-              </div>
-              {ncloc > 0 && (
-                <div style={S.statCard}>
-                  <div style={{ ...S.statNum, color: '#e6edf3', fontSize: 18 }}>{ncloc.toLocaleString()}</div>
-                  <div style={S.statLabel}>Lines of Code</div>
+        <div style={S.scannerStat}>
+          <div style={S.statCard}><div style={{ ...S.statNum, color: bugs > 0 ? '#f85149' : '#3fb950' }}>{bugs}</div><div style={S.statLabel}>Bugs</div></div>
+          <div style={S.statCard}><div style={{ ...S.statNum, color: vulns > 0 ? '#f85149' : '#3fb950' }}>{vulns}</div><div style={S.statLabel}>Vulnerabilities</div></div>
+          <div style={S.statCard}><div style={{ ...S.statNum, color: codeSmells > 0 ? '#d29922' : '#3fb950' }}>{codeSmells}</div><div style={S.statLabel}>Code Smells</div></div>
+          <div style={S.statCard}><div style={{ ...S.statNum, color: hotspots > 0 ? '#d29922' : '#3fb950' }}>{hotspots}</div><div style={S.statLabel}>Hotspots</div></div>
+          {ncloc > 0 && <div style={S.statCard}><div style={{ ...S.statNum, color: '#e6edf3', fontSize: 18 }}>{ncloc.toLocaleString()}</div><div style={S.statLabel}>Lines of Code</div></div>}
+          {measures.reliability_rating && <div style={S.statCard}><div style={{ ...S.statNum, color: ratingColor(measures.reliability_rating), fontSize: 22 }}>{ratingLabel(measures.reliability_rating)}</div><div style={S.statLabel}>Reliability</div></div>}
+          {measures.security_rating && <div style={S.statCard}><div style={{ ...S.statNum, color: ratingColor(measures.security_rating), fontSize: 22 }}>{ratingLabel(measures.security_rating)}</div><div style={S.statLabel}>Security</div></div>}
+        </div>
+        {issues.length > 0 && (
+          <div>
+            <div style={{ fontSize: 13, fontWeight: 600, color: '#e6edf3', marginBottom: 12 }}>Top Issues ({data.issues?.total} total)</div>
+            {issues.map((issue, i) => (
+              <div key={i} style={{ ...S.pre, marginBottom: 8, padding: 14 }}>
+                <div style={{ display: 'flex', gap: 8, marginBottom: 6 }}>
+                  <span style={{ color: sevColor(issue.severity), fontWeight: 700, fontSize: 11 }}>{issue.severity}</span>
+                  <span style={{ color: '#484f58', fontSize: 11 }}>{issue.type}</span>
                 </div>
-              )}
-              {measures.reliability_rating && (
-                <div style={S.statCard}>
-                  <div style={{ ...S.statNum, color: ratingColor(measures.reliability_rating), fontSize: 22 }}>{ratingLabel(measures.reliability_rating)}</div>
-                  <div style={S.statLabel}>Reliability</div>
-                </div>
-              )}
-              {measures.security_rating && (
-                <div style={S.statCard}>
-                  <div style={{ ...S.statNum, color: ratingColor(measures.security_rating), fontSize: 22 }}>{ratingLabel(measures.security_rating)}</div>
-                  <div style={S.statLabel}>Security</div>
-                </div>
-              )}
-            </div>
-
-            {issues.length > 0 && (
-              <div>
-                <div style={{ fontSize: 13, fontWeight: 600, color: '#e6edf3', marginBottom: 12 }}>
-                  Top Issues ({data.issues?.total} total)
-                </div>
-                {issues.map((issue, i) => (
-                  <div key={i} style={{ ...S.pre, marginBottom: 8, padding: 14 }}>
-                    <div style={{ display: 'flex', gap: 8, marginBottom: 6 }}>
-                      <span style={{ color: sevColor(issue.severity), fontWeight: 700, fontSize: 11 }}>{issue.severity}</span>
-                      <span style={{ color: '#484f58', fontSize: 11 }}>{issue.type}</span>
-                    </div>
-                    <div style={{ color: '#e6edf3', fontSize: 13 }}>{issue.message}</div>
-                    {issue.component && (
-                      <div style={{ color: '#8b949e', fontSize: 11, marginTop: 4 }}>
-                        {issue.component.split(':').pop()}{issue.line ? `:${issue.line}` : ''}
-                      </div>
-                    )}
-                  </div>
-                ))}
+                <div style={{ color: '#e6edf3', fontSize: 13 }}>{issue.message}</div>
+                {issue.component && <div style={{ color: '#8b949e', fontSize: 11, marginTop: 4 }}>{issue.component.split(':').pop()}{issue.line ? `:${issue.line}` : ''}</div>}
               </div>
-            )}
-
-            {issues.length === 0 && bugs === 0 && vulns === 0 && (
-              <div style={{ ...S.empty, color: '#3fb950' }}>✓ No bugs or vulnerabilities found.</div>
-            )}
-          </>
-        ) : (
-          <div style={{ color: '#8b949e', fontSize: 13 }}>
-            Analysis recorded. Metrics could not be fetched — ensure SonarQube URL and token are set in Settings.
+            ))}
           </div>
         )}
+        {issues.length === 0 && bugs === 0 && vulns === 0 && <div style={{ ...S.empty, color: '#3fb950' }}>✓ No bugs or vulnerabilities found.</div>}
       </div>
     );
   }
@@ -207,9 +302,7 @@ function TrivyFsReport({ content }) {
       </div>
       {results.map((r, i) => (
         <div key={i} style={{ ...S.pre, marginBottom: 10, padding: 16 }}>
-          <div style={{ color: '#e6edf3', fontWeight: 600, marginBottom: 8 }}>
-            {r.Target} <span style={{ fontSize: 11, color: '#8b949e' }}>({r.Type})</span>
-          </div>
+          <div style={{ color: '#e6edf3', fontWeight: 600, marginBottom: 8 }}>{r.Target} <span style={{ fontSize: 11, color: '#8b949e' }}>({r.Type})</span></div>
           {r.Vulnerabilities.map((v, j) => (
             <div key={j} style={{ marginBottom: 8, paddingBottom: 8, borderBottom: j < r.Vulnerabilities.length - 1 ? '1px solid #21262d' : 'none' }}>
               <span style={{ color: v.Severity === 'CRITICAL' ? '#f85149' : '#d29922', fontWeight: 600 }}>{v.VulnerabilityID}</span>
@@ -226,7 +319,7 @@ function TrivyFsReport({ content }) {
 }
 
 function TrivyReport({ content }) {
-  if (!content) return <div style={S.empty}>No Trivy report available. (Runs only if Dockerfile is present)</div>;
+  if (!content) return <div style={S.empty}>No Trivy report. (Runs only if Dockerfile is present)</div>;
   const lines = content.split('\n');
   return (
     <pre style={S.pre}>
@@ -239,25 +332,18 @@ function TrivyReport({ content }) {
 }
 
 function CheckovReport({ content }) {
-  if (!content) return <div style={S.empty}>No IaC scan report available. (Runs if Dockerfile or docker-compose.yml is present)</div>;
+  if (!content) return <div style={S.empty}>No IaC scan report. (Runs if Dockerfile or docker-compose.yml is present)</div>;
   const raw = parseJson(content);
   if (!raw) return <pre style={S.pre}>{content}</pre>;
-
-  // Checkov outputs an array when scanning multiple files (monorepo), or a single object
   const reports = Array.isArray(raw) ? raw : [raw];
   const failed = reports.flatMap(r => r.results?.failed_checks || []);
   const passed = reports.reduce((s, r) => s + (r.summary?.passed || 0), 0);
   const failedCount = reports.reduce((s, r) => s + (r.summary?.failed || 0), 0) || failed.length;
-
-  if (failedCount === 0) {
-    return <div style={{ ...S.empty, color: '#3fb950' }}>✓ No IaC misconfigurations found. {passed} checks passed.</div>;
-  }
-
+  if (failedCount === 0) return <div style={{ ...S.empty, color: '#3fb950' }}>✓ No IaC misconfigurations found. {passed} checks passed.</div>;
   const sevColor = s => (s === 'HIGH' || s === 'CRITICAL') ? '#f85149' : s === 'MEDIUM' ? '#d29922' : '#8b949e';
   const high = failed.filter(f => f.severity === 'HIGH' || f.severity === 'CRITICAL').length;
   const medium = failed.filter(f => f.severity === 'MEDIUM').length;
   const low = failedCount - high - medium;
-
   return (
     <div>
       <div style={S.scannerStat}>
@@ -274,12 +360,82 @@ function CheckovReport({ content }) {
             <span style={{ color: '#58a6ff', fontSize: 11, fontFamily: 'monospace' }}>{f.check_id}</span>
           </div>
           <div style={{ color: '#e6edf3', fontSize: 13, marginBottom: 4 }}>{f.check?.name || f.check_id}</div>
-          <div style={{ color: '#8b949e', fontSize: 11 }}>
-            {f.repo_file_path || f.file_path}
-            {f.file_line_range && ` (lines ${f.file_line_range[0]}-${f.file_line_range[1]})`}
-          </div>
+          <div style={{ color: '#8b949e', fontSize: 11 }}>{f.repo_file_path || f.file_path}{f.file_line_range && ` (lines ${f.file_line_range[0]}-${f.file_line_range[1]})`}</div>
         </div>
       ))}
+    </div>
+  );
+}
+
+// ── AI Pre-Scan Analysis Card ─────────────────────────────────────────────────
+const SECTION_ICONS = {
+  'Top Security Risks': '🛡️',
+  'Secrets or Credentials': '🔑',
+  'Common Vulnerable Dependency': '📦',
+  'OWASP': '⚠️',
+  'Focus Areas': '🔍',
+};
+
+function renderInline(text) {
+  const parts = text.split(/(\*\*[^*]+\*\*)/g);
+  return parts.map((p, i) =>
+    p.startsWith('**') && p.endsWith('**')
+      ? <strong key={i} style={{ color: '#e6edf3', fontWeight: 600 }}>{p.slice(2, -2)}</strong>
+      : <span key={i}>{p}</span>
+  );
+}
+
+function PreAnalysisCard({ text }) {
+  const sections = [];
+  let current = null;
+  for (const raw of text.split('\n')) {
+    const line = raw.trim();
+    if (!line) continue;
+    if (line.startsWith('### ')) {
+      if (current) sections.push(current);
+      const title = line.replace(/^###\s*/, '');
+      const icon = Object.entries(SECTION_ICONS).find(([k]) => title.includes(k))?.[1] || '📋';
+      current = { title, icon, items: [] };
+    } else if (line.startsWith('- ') && current) {
+      current.items.push(line.slice(2));
+    } else if (current) {
+      current.items.push(line);
+    }
+  }
+  if (current) sections.push(current);
+
+  return (
+    <div style={{ marginBottom: 20, background: '#161b22', border: '1px solid rgba(88,166,255,0.2)', borderRadius: 10, overflow: 'hidden', animation: 'fadeIn 0.3s ease' }}>
+      {/* Header bar */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '12px 18px', background: 'rgba(88,166,255,0.06)', borderBottom: '1px solid rgba(88,166,255,0.15)' }}>
+        <span style={{ fontSize: 16 }}>✨</span>
+        <div>
+          <div style={{ fontSize: 12, fontWeight: 700, color: '#58a6ff', letterSpacing: '0.06em' }}>AI PRE-SCAN ANALYSIS</div>
+          <div style={{ fontSize: 11, color: '#484f58', marginTop: 1 }}>Generated before pipeline run — highlights expected risk areas</div>
+        </div>
+      </div>
+
+      {/* Sections grid */}
+      <div style={{ padding: '16px 18px', display: 'flex', flexDirection: 'column', gap: 14 }}>
+        {sections.length === 0 ? (
+          <div style={{ fontSize: 13, color: '#e6edf3', lineHeight: 1.7, whiteSpace: 'pre-wrap' }}>{text}</div>
+        ) : sections.map((sec, si) => (
+          <div key={si} style={{ background: '#0d1117', border: '1px solid #21262d', borderRadius: 8, padding: '12px 16px' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10 }}>
+              <span style={{ fontSize: 15 }}>{sec.icon}</span>
+              <span style={{ fontSize: 12, fontWeight: 700, color: '#d29922', letterSpacing: '0.04em' }}>{sec.title}</span>
+            </div>
+            <ul style={{ listStyle: 'none', padding: 0, margin: 0, display: 'flex', flexDirection: 'column', gap: 7 }}>
+              {sec.items.map((item, ii) => (
+                <li key={ii} style={{ display: 'flex', gap: 8, alignItems: 'flex-start' }}>
+                  <span style={{ color: '#388bfd', flexShrink: 0, marginTop: 2, fontSize: 11 }}>▸</span>
+                  <span style={{ fontSize: 12, color: '#8b949e', lineHeight: 1.6 }}>{renderInline(item)}</span>
+                </li>
+              ))}
+            </ul>
+          </div>
+        ))}
+      </div>
     </div>
   );
 }
@@ -318,6 +474,7 @@ function AiSummary({ scanId, ready }) {
   return <div style={S.aiBox}>{summary}</div>;
 }
 
+// ── Main Page ──────────────────────────────────────────────────────────────────
 export default function ScanDetailPage() {
   const { id } = useParams();
   const nav = useNavigate();
@@ -352,13 +509,8 @@ export default function ScanDetailPage() {
       try {
         const data = JSON.parse(e.data);
         setScan(prev => ({ ...prev, status: data.status, last_build: data.build || prev?.last_build }));
-        if (data.status === 'done') {
-          es.close();
-          loadAllReports();
-        } else if (data.status === 'failed') {
-          setPollError(data.error || 'Scan failed.');
-          es.close();
-        }
+        if (data.status === 'done') { es.close(); loadAllReports(); }
+        else if (data.status === 'failed') { setPollError(data.error || 'Scan failed.'); es.close(); }
       } catch {}
     };
     es.onerror = () => es.close();
@@ -368,9 +520,7 @@ export default function ScanDetailPage() {
     const types = ['gitleaks', 'semgrep', 'owasp', 'trivy', 'checkov'];
     const results = await Promise.allSettled(types.map(t => api.get(`/scans/${id}/reports/${t}`)));
     const newReports = {};
-    results.forEach((r, i) => {
-      if (r.status === 'fulfilled') newReports[types[i]] = r.value.data.content;
-    });
+    results.forEach((r, i) => { if (r.status === 'fulfilled') newReports[types[i]] = r.value.data.content; });
     setReports(newReports);
   };
 
@@ -384,9 +534,7 @@ export default function ScanDetailPage() {
       startPolling();
     } catch (err) {
       alert(err.response?.data?.error || 'Rerun failed');
-    } finally {
-      setActioning(null);
-    }
+    } finally { setActioning(null); }
   };
 
   const stop = async () => {
@@ -397,9 +545,7 @@ export default function ScanDetailPage() {
       setScan(prev => ({ ...prev, status: 'failed' }));
     } catch (err) {
       alert(err.response?.data?.error || 'Stop failed');
-    } finally {
-      setActioning(null);
-    }
+    } finally { setActioning(null); }
   };
 
   const deleteScan = async () => {
@@ -416,56 +562,58 @@ export default function ScanDetailPage() {
 
   return (
     <div style={S.page}>
+      {/* Header */}
       <div style={S.header}>
-        <button style={S.back} onClick={() => nav('/dashboard')}>← Back to Dashboard</button>
-        <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between' }}>
+        <button style={S.back} onClick={() => nav('/dashboard')}>
+          <span>←</span> Back to Dashboard
+        </button>
+        <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 16 }}>
           <div>
             <div style={S.h1}>{scan.repo_url.replace(/\.git$/, '').split('/').slice(-2).join('/')}</div>
             <div style={S.meta}>
               <span style={S.branch}>{scan.branch}</span>
               <span style={{ ...S.status, ...statusStyle(scan.status) }}>
-                {scan.status === 'running' ? '⟳ Running' : scan.status === 'done' ? '✓ Done' : scan.status === 'failed' ? '✗ Failed' : '⏳ Pending'}
+                {scan.status === 'running'
+                  ? <><span style={{ display: 'inline-block', animation: 'spin 1.2s linear infinite' }}>⟳</span> Running</>
+                  : scan.status === 'done' ? '✓ Done'
+                  : scan.status === 'failed' ? '✗ Failed'
+                  : '⏳ Pending'}
               </span>
               {scan.last_build && <span style={{ color: '#8b949e', fontSize: 12 }}>Build #{scan.last_build}</span>}
             </div>
           </div>
-          <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+          <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexShrink: 0 }}>
             {running && (
-              <button
-                disabled={actioning === 'stop'}
-                onClick={stop}
-                style={{
-                  padding: '6px 14px', borderRadius: 6, fontSize: 12,
-                  background: actioning === 'stop' ? '#21262d' : '#21262d',
-                  border: `1px solid ${actioning === 'stop' ? '#484f58' : '#d29922'}`,
-                  color: actioning === 'stop' ? '#484f58' : '#d29922',
-                  cursor: actioning === 'stop' ? 'not-allowed' : 'pointer',
-                  opacity: actioning === 'stop' ? 0.6 : 1,
-                }}
-              >
+              <button disabled={actioning === 'stop'} onClick={stop} style={{
+                padding: '6px 14px', borderRadius: 6, fontSize: 12, background: '#21262d',
+                border: `1px solid ${actioning === 'stop' ? '#484f58' : '#d29922'}`,
+                color: actioning === 'stop' ? '#484f58' : '#d29922',
+                cursor: actioning === 'stop' ? 'not-allowed' : 'pointer',
+                opacity: actioning === 'stop' ? 0.6 : 1,
+              }}>
                 {actioning === 'stop' ? 'Stopping...' : '■ Stop'}
               </button>
             )}
             {!running && (
-              <button
-                disabled={actioning === 'rerun'}
-                onClick={rerun}
-                style={{
-                  padding: '6px 14px', borderRadius: 6, fontSize: 12,
-                  background: '#21262d',
-                  border: `1px solid ${actioning === 'rerun' ? '#484f58' : '#388bfd'}`,
-                  color: actioning === 'rerun' ? '#484f58' : '#388bfd',
-                  cursor: actioning === 'rerun' ? 'not-allowed' : 'pointer',
-                  opacity: actioning === 'rerun' ? 0.6 : 1,
-                }}
-              >
+              <button disabled={actioning === 'rerun'} onClick={rerun} style={{
+                padding: '6px 14px', borderRadius: 6, fontSize: 12, background: '#21262d',
+                border: `1px solid ${actioning === 'rerun' ? '#484f58' : '#388bfd'}`,
+                color: actioning === 'rerun' ? '#484f58' : '#388bfd',
+                cursor: actioning === 'rerun' ? 'not-allowed' : 'pointer',
+                opacity: actioning === 'rerun' ? 0.6 : 1,
+              }}>
                 {actioning === 'rerun' ? 'Rerunning...' : '↺ Rerun'}
               </button>
             )}
-            <button style={S.deleteBtn} onClick={deleteScan}>Delete</button>
+            <button style={{ padding: '6px 14px', background: '#21262d', border: '1px solid #f85149', borderRadius: 6, color: '#f85149', fontSize: 12, cursor: 'pointer' }} onClick={deleteScan}>
+              Delete
+            </button>
           </div>
         </div>
       </div>
+
+      {/* Pipeline Tracker */}
+      <PipelineTracker scan={scan} />
 
       {pollError && (
         <div style={{ marginBottom: 20, padding: '12px 16px', background: 'rgba(248,81,73,0.1)', border: '1px solid rgba(248,81,73,0.3)', borderRadius: 6, color: '#f85149', fontSize: 13 }}>
@@ -473,31 +621,24 @@ export default function ScanDetailPage() {
         </div>
       )}
 
+      {/* Metadata badges */}
       {scan.detected_lang && (
         <div style={{ marginBottom: 16, display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
           <span style={{ fontSize: 12, color: '#8b949e' }}>Detected:</span>
-          <span style={{ background: '#21262d', border: '1px solid #30363d', borderRadius: 4, padding: '2px 8px', fontSize: 12, color: '#e6edf3' }}>
-            {scan.detected_lang}
-          </span>
+          <span style={{ background: '#21262d', border: '1px solid #30363d', borderRadius: 4, padding: '2px 8px', fontSize: 12, color: '#e6edf3' }}>{scan.detected_lang}</span>
           {scan.has_dockerfile
-            ? <span style={{ background: 'rgba(63,185,80,0.15)', border: '1px solid rgba(63,185,80,0.3)', borderRadius: 4, padding: '2px 8px', fontSize: 11, color: '#3fb950' }}>✓ Dockerfile</span>
-            : <span style={{ background: 'rgba(139,148,158,0.1)', border: '1px solid #30363d', borderRadius: 4, padding: '2px 8px', fontSize: 11, color: '#8b949e' }}>✗ No Dockerfile — Trivy skipped</span>
+            ? <span style={{ background: 'rgba(63,185,80,0.12)', border: '1px solid rgba(63,185,80,0.3)', borderRadius: 4, padding: '2px 8px', fontSize: 11, color: '#3fb950' }}>✓ Dockerfile</span>
+            : <span style={{ background: 'rgba(139,148,158,0.08)', border: '1px solid #30363d', borderRadius: 4, padding: '2px 8px', fontSize: 11, color: '#8b949e' }}>✗ No Dockerfile — Trivy skipped</span>
           }
           {scan.jenkinsfile_pushed && (
-            <span style={{ background: 'rgba(88,166,255,0.12)', border: '1px solid rgba(88,166,255,0.3)', borderRadius: 4, padding: '2px 8px', fontSize: 11, color: '#58a6ff' }}>
-              ✓ Jenkinsfile.security pushed to repo
-            </span>
+            <span style={{ background: 'rgba(88,166,255,0.1)', border: '1px solid rgba(88,166,255,0.3)', borderRadius: 4, padding: '2px 8px', fontSize: 11, color: '#58a6ff' }}>✓ Jenkinsfile.security pushed</span>
           )}
         </div>
       )}
 
-      {scan.pre_analysis && (
-        <div style={{ marginBottom: 20, background: '#0d1117', border: '1px solid #30363d', borderRadius: 6, padding: 16 }}>
-          <div style={{ fontSize: 12, color: '#8b949e', fontWeight: 600, marginBottom: 8 }}>✨ AI Pre-Scan Analysis</div>
-          <div style={{ fontSize: 13, color: '#e6edf3', lineHeight: 1.7, whiteSpace: 'pre-wrap' }}>{scan.pre_analysis}</div>
-        </div>
-      )}
+      {scan.pre_analysis && <PreAnalysisCard text={scan.pre_analysis} />}
 
+      {/* Tabs */}
       <div style={S.tabs}>
         {TABS.map(t => (
           <button key={t.id} style={{ ...S.tab, ...(tab === t.id ? S.tabActive : {}) }} onClick={() => setTab(t.id)}>
@@ -506,12 +647,14 @@ export default function ScanDetailPage() {
         ))}
       </div>
 
-      {tab === 'gitleaks' && <GitleaksReport content={reports.gitleaks} />}
-      {tab === 'semgrep' && <SonarQubeReport content={reports.semgrep} />}
-      {tab === 'owasp' && <TrivyFsReport content={reports.owasp} />}
-      {tab === 'trivy' && <TrivyReport content={reports.trivy} />}
-      {tab === 'checkov' && <CheckovReport content={reports.checkov} />}
-      {tab === 'ai' && <AiSummary scanId={id} ready={done} />}
+      <div style={{ animation: 'fadeIn 0.2s ease' }}>
+        {tab === 'gitleaks' && <GitleaksReport content={reports.gitleaks} />}
+        {tab === 'semgrep' && <SonarQubeReport content={reports.semgrep} />}
+        {tab === 'owasp' && <TrivyFsReport content={reports.owasp} />}
+        {tab === 'trivy' && <TrivyReport content={reports.trivy} />}
+        {tab === 'checkov' && <CheckovReport content={reports.checkov} />}
+        {tab === 'ai' && <AiSummary scanId={id} ready={done} />}
+      </div>
     </div>
   );
 }

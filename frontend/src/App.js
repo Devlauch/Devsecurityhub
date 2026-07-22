@@ -5,6 +5,7 @@ import DashboardPage from './pages/DashboardPage';
 import NewScanPage from './pages/NewScanPage';
 import ScanDetailPage from './pages/ScanDetailPage';
 import SettingsPage from './pages/SettingsPage';
+import ReportsPage from './pages/ReportsPage';
 
 export const AuthContext = createContext(null);
 
@@ -42,6 +43,7 @@ function Nav() {
       </div>
       {link('/dashboard', '▦ Dashboard')}
       {link('/scans/new', '+ New Scan')}
+      {link('/reports', '📊 Reports')}
       {link('/settings', '⚙ Settings')}
       <button style={S.logoutBtn} onClick={logout}>Logout</button>
     </div>
@@ -81,6 +83,7 @@ export default function App() {
           <Route path="/dashboard" element={<PrivateRoute><Layout><DashboardPage /></Layout></PrivateRoute>} />
           <Route path="/scans/new" element={<PrivateRoute><Layout><NewScanPage /></Layout></PrivateRoute>} />
           <Route path="/scans/:id" element={<PrivateRoute><Layout><ScanDetailPage /></Layout></PrivateRoute>} />
+          <Route path="/reports" element={<PrivateRoute><Layout><ReportsPage /></Layout></PrivateRoute>} />
           <Route path="/settings" element={<PrivateRoute><Layout><SettingsPage /></Layout></PrivateRoute>} />
           <Route path="*" element={<Navigate to={user ? '/dashboard' : '/login'} replace />} />
         </Routes>
