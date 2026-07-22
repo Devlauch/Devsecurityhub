@@ -1,0 +1,61 @@
+version: '3.9'
+
+services:
+  db:
+    image: postgres:16-alpine
+    container_name: devsechub-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: devsechub
+      POSTGRES_USER: devsechub
+      POSTGRES_PASSWORD: devsechub
+    volumes:
+      - devsechub_pgdata:/var/lib/postgresql/data
+    networks:
+      - devpilot
+    healthcheck:
+      test: ["CMD-SHELL", "psql -U devsechub -d devsechub -c 'SELECT 1' > /dev/null 2>&1"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: devsechub-backend
+    restart: unless-stopped
+    ports:
+      - "4500:4500"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    networks:
+      - devpilot
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      PORT: 4500
+      JWT_SECRET: ${JWT_SECRET:-change-this-secret}
+      DATABASE_URL: postgres://devsechub:devsechub@db:5432/devsechub
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: devsechub-frontend
+    restart: unless-stopped
+    ports:
+      - "4501:80"
+    depends_on:
+      - backend
+    networks:
+      - devpilot
+
+volumes:
+  devsechub_pgdata:
+
+networks:
+  devpilot:
+    external: true

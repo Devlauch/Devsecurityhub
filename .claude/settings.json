@@ -1,0 +1,15 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(ls \"\\\\\\\\wsl.localhost\\\\Ubuntu-24.04\\\\home\\\\pavan\\\\project\\\\devsecurityhub\")",
+      "Bash(find \"\\\\\\\\wsl.localhost\\\\Ubuntu-24.04\\\\home\\\\pavan\\\\project\\\\devsecurityhub\" -type f -name \"*.json\" -o -name \"*.js\" -o -name \"*.ts\" -o -name \"*.md\" -o -name \".env*\" -o -name \"*.yaml\" -o -name \"*.yml\")",
+      "Bash(find \"\\\\\\\\wsl.localhost\\\\Ubuntu-24.04\\\\home\\\\pavan\\\\project\\\\devsecurityhub\" -type d)",
+      "Bash(find \"\\\\\\\\wsl.localhost\\\\Ubuntu-24.04\\\\home\\\\pavan\\\\project\\\\devsecurityhub\" -type f \\\\\\( -name \"*.js\" -o -name \"*.json\" -o -name \"*.md\" -o -name \".env*\" -o -name \"*.yml\" -o -name \"*.yaml\" \\\\\\))",
+      "Bash(wsl.exe ls *)",
+      "Bash(find \"\\\\\\\\wsl.localhost\\\\Ubuntu-24.04\\\\home\\\\pavan\\\\project\\\\devsecurityhub\" -name \"schema.sql\")",
+      "Bash(find \"\\\\\\\\wsl.localhost\\\\Ubuntu-24.04\\\\home\\\\pavan\\\\project\\\\devsecurityhub\" -name \"nginx.conf\" -o -name \"*.env\")",
+      "Bash(wsl -d Ubuntu-24.04 -- bash -c \"docker exec devsechub-db psql -U devsechub -d devsechub -c 'SELECT id, user_id, url, LEFT\\(token,10\\) as token_preview FROM sonar_connections;'\")",
+      "Bash(wsl -d Ubuntu-24.04 -- bash -c \"docker exec devsechub-db psql -U devsechub -d devsechub -c \\\\\"SELECT sr.scan_id, sr.type, LEFT\\(sr.content, 200\\) as content_preview FROM scan_reports sr JOIN scans s ON s.id=sr.scan_id ORDER BY sr.scan_id DESC, sr.type LIMIT 20;\\\\\"\")"
+    ]
+  }
+}
