@@ -3,6 +3,7 @@ import { useParams, useNavigate } from 'react-router-dom';
 import api from '../api/client';
 
 const TABS = [
+  { id: 'correlated', label: '🔗 Correlated' },
   { id: 'gitleaks', label: '🔑 Secrets' },
   { id: 'semgrep', label: '🔍 SAST' },
   { id: 'owasp', label: '📦 Dependencies' },
@@ -12,13 +13,16 @@ const TABS = [
 ];
 
 const PIPELINE_STAGES = [
-  { id: 'checkout', label: 'Checkout', icon: '📥', endSec: 15 },
-  { id: 'setup', label: 'Setup Tools', icon: '🔧', endSec: 60 },
-  { id: 'gitleaks', label: 'Gitleaks', icon: '🔑', endSec: 130 },
-  { id: 'sonarqube', label: 'SonarQube', icon: '🔍', endSec: 220 },
-  { id: 'trivy-fs', label: 'Trivy FS', icon: '📦', endSec: 290 },
-  { id: 'checkov', label: 'Checkov', icon: '🏗️', endSec: 360 },
-  { id: 'container', label: 'Container', icon: '🐳', endSec: 460, dockerOnly: true },
+  { id: 'checkout',    label: 'Checkout',    icon: '📥', endSec: 15 },
+  { id: 'setup',       label: 'Setup Tools', icon: '🔧', endSec: 70 },
+  { id: 'gitleaks',    label: 'Gitleaks',    icon: '🔑', endSec: 120 },
+  { id: 'trufflehog',  label: 'TruffleHog',  icon: '🔒', endSec: 170 },
+  { id: 'sonarqube',   label: 'SonarQube',   icon: '🔍', endSec: 270 },
+  { id: 'semgrep',     label: 'Semgrep',     icon: '🧪', endSec: 360 },
+  { id: 'trivy-fs',    label: 'Trivy FS',    icon: '📦', endSec: 420 },
+  { id: 'owasp-dc',    label: 'OWASP DC',    icon: '🛡️', endSec: 560 },
+  { id: 'checkov',     label: 'Checkov',     icon: '🏗️', endSec: 630 },
+  { id: 'container',   label: 'Container',   icon: '🐳', endSec: 760, dockerOnly: true },
 ];
 
 const S = {
@@ -192,142 +196,270 @@ function PipelineTracker({ scan }) {
 }
 
 // ── Report Components ─────────────────────────────────────────────────────────
-function GitleaksReport({ content }) {
-  if (!content) return <div style={S.empty}>No secrets report available yet.</div>;
-  const findings = parseJson(content);
-  if (!findings || !Array.isArray(findings)) return <pre style={S.pre}>{content}</pre>;
-  if (findings.length === 0) return <div style={{ ...S.empty, color: '#3fb950' }}>✓ No secrets found.</div>;
+const ALL_SOURCE_BADGES = {
+  gitleaks:   { label: 'Gitleaks',   bg: 'rgba(248,81,73,0.12)',  border: 'rgba(248,81,73,0.35)',  color: '#f85149' },
+  trufflehog: { label: 'TruffleHog', bg: 'rgba(210,153,34,0.12)', border: 'rgba(210,153,34,0.35)', color: '#d29922' },
+  sonarqube:  { label: 'SonarQube',  bg: 'rgba(56,139,253,0.12)', border: 'rgba(56,139,253,0.35)', color: '#388bfd' },
+  semgrep:    { label: 'Semgrep',    bg: 'rgba(63,185,80,0.12)',  border: 'rgba(63,185,80,0.35)',  color: '#3fb950' },
+  trivy:      { label: 'Trivy',      bg: 'rgba(210,153,34,0.12)', border: 'rgba(210,153,34,0.35)', color: '#d29922' },
+  grype:      { label: 'Grype',      bg: 'rgba(88,166,255,0.12)', border: 'rgba(88,166,255,0.35)', color: '#58a6ff' },
+};
+const SEV_COLOR_ALL = { CRITICAL: '#f85149', HIGH: '#d29922', MEDIUM: '#388bfd', LOW: '#8b949e', INFO: '#484f58', UNKNOWN: '#484f58' };
+
+function SourceBadge({ src }) {
+  const b = ALL_SOURCE_BADGES[src] || { label: src, bg: '#21262d', border: '#30363d', color: '#8b949e' };
+  return <span style={{ background: b.bg, border: `1px solid ${b.border}`, borderRadius: 3, padding: '1px 7px', fontSize: 10, color: b.color, fontWeight: 600 }}>{b.label}</span>;
+}
+
+function ConfirmedBadge() {
+  return <span style={{ background: 'rgba(63,185,80,0.12)', border: '1px solid rgba(63,185,80,0.3)', borderRadius: 3, padding: '1px 7px', fontSize: 10, color: '#3fb950', fontWeight: 700 }}>✓ CONFIRMED</span>;
+}
+
+function MergedBanner({ left, right, leftCount, rightCount, bothCount, extra }) {
+  return (
+    <div style={{ marginBottom: 14, padding: '8px 14px', background: '#0d1117', border: '1px solid #30363d', borderRadius: 6, display: 'flex', gap: 16, flexWrap: 'wrap', alignItems: 'center' }}>
+      <span style={{ fontSize: 12, color: '#8b949e' }}>Scanners:</span>
+      <span style={{ fontSize: 12, color: ALL_SOURCE_BADGES[left]?.color || '#8b949e', fontWeight: 600 }}>{(ALL_SOURCE_BADGES[left]?.label || left)} — {leftCount} findings</span>
+      <span style={{ fontSize: 12, color: ALL_SOURCE_BADGES[right]?.color || '#8b949e', fontWeight: 600 }}>{(ALL_SOURCE_BADGES[right]?.label || right)} — {rightCount} findings</span>
+      {bothCount > 0 && <span style={{ fontSize: 12, color: '#3fb950', fontWeight: 600 }}>✦ {bothCount} confirmed by both</span>}
+      {extra && <span style={{ fontSize: 11, color: '#58a6ff', marginLeft: 'auto' }}>{extra}</span>}
+    </div>
+  );
+}
+
+function SecretsReport({ scanId, done }) {
+  const [data, setData] = useState(null);
+  const [loading, setLoading] = useState(false);
+
+  useEffect(() => {
+    if (!done) return;
+    setLoading(true);
+    api.get(`/scans/${scanId}/reports/secrets`)
+      .then(r => setData(r.data))
+      .catch(() => {})
+      .finally(() => setLoading(false));
+  }, [scanId, done]);
+
+  if (!done) return <div style={S.empty}>Secrets report available once scan completes.</div>;
+  if (loading) return <div style={S.loading}>Merging Gitleaks + TruffleHog results...</div>;
+  if (!data) return <div style={S.empty}>No secrets scan data yet.</div>;
+  if (data.totalFindings === 0) return <div style={{ ...S.empty, color: '#3fb950' }}>✓ No secrets found across both scanners.</div>;
+
   return (
     <div>
+      <MergedBanner left="gitleaks" right="trufflehog" leftCount={data.gitleaksCount} rightCount={data.trufflehogCount} bothCount={data.bothCount} extra={data.verifiedCount > 0 ? `⚠ ${data.verifiedCount} verified active` : null} />
       <div style={S.scannerStat}>
-        <div style={S.statCard}>
-          <div style={{ ...S.statNum, color: '#f85149' }}>{findings.length}</div>
-          <div style={S.statLabel}>Secrets Found</div>
-        </div>
+        <div style={S.statCard}><div style={{ ...S.statNum, color: '#f85149' }}>{data.totalFindings}</div><div style={S.statLabel}>Unique Secrets</div></div>
+        {data.bothCount > 0 && <div style={S.statCard}><div style={{ ...S.statNum, color: '#3fb950' }}>{data.bothCount}</div><div style={S.statLabel}>Confirmed</div></div>}
+        {data.verifiedCount > 0 && <div style={S.statCard}><div style={{ ...S.statNum, color: '#f85149' }}>{data.verifiedCount}</div><div style={S.statLabel}>Verified Active</div></div>}
       </div>
-      {findings.map((f, i) => (
-        <div key={i} style={{ ...S.pre, marginBottom: 10, padding: 16 }}>
-          <div style={{ color: '#f85149', fontWeight: 700, marginBottom: 6 }}>{f.RuleID || f.ruleId || 'Secret'}</div>
-          <div><span style={{ color: '#8b949e' }}>File:</span> {f.File || f.file || 'unknown'}</div>
-          {f.StartLine && <div><span style={{ color: '#8b949e' }}>Line:</span> {f.StartLine}</div>}
-          {f.Secret && <div><span style={{ color: '#8b949e' }}>Match:</span> {f.Secret.slice(0, 40)}...</div>}
-          {f.Description && <div style={{ marginTop: 4, color: '#d29922' }}>{f.Description}</div>}
+      {data.items.map((item, i) => (
+        <div key={i} style={{ background: '#0d1117', border: `1px solid ${item.sources.length > 1 ? 'rgba(63,185,80,0.3)' : item.verified ? 'rgba(248,81,73,0.4)' : '#21262d'}`, borderRadius: 6, padding: 14, marginBottom: 8 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+            <span style={{ color: '#f85149', fontWeight: 700, fontSize: 13 }}>{item.detectorType}</span>
+            {item.verified && <span style={{ background: 'rgba(248,81,73,0.15)', border: '1px solid rgba(248,81,73,0.4)', borderRadius: 3, padding: '1px 7px', fontSize: 10, color: '#f85149', fontWeight: 700 }}>⚠ VERIFIED ACTIVE</span>}
+            {item.sources.map(src => <SourceBadge key={src} src={src} />)}
+            {item.sources.length > 1 && <ConfirmedBadge />}
+          </div>
+          {item.file && <div style={{ color: '#8b949e', fontSize: 11, marginTop: 5 }}>File: {item.file}{item.line ? ` · Line ${item.line}` : ''}</div>}
+          {item.match && <div style={{ color: '#484f58', fontSize: 11, marginTop: 3, fontFamily: 'monospace' }}>Match: {item.match}</div>}
         </div>
       ))}
     </div>
   );
 }
 
-function SonarQubeReport({ content }) {
-  if (!content) return <div style={S.empty}>No SonarQube report available yet.</div>;
-  const data = parseJson(content);
-  if (!data) return <pre style={S.pre}>{content}</pre>;
+function SastReport({ scanId, done, sonarContent }) {
+  const [data, setData] = useState(null);
+  const [loading, setLoading] = useState(false);
 
-  if (data.status === 'NOT_CONFIGURED') {
-    return (
-      <div style={{ ...S.pre, color: '#8b949e' }}>
-        <div style={{ fontWeight: 600, marginBottom: 8, color: '#d29922' }}>⚠ SonarQube Not Configured</div>
-        <div>{data.message}</div>
-        <div style={{ marginTop: 12, fontSize: 11, lineHeight: 1.8 }}>
-          Go to Settings → SonarQube → enter your SonarQube URL and token → Push to Jenkins.
-        </div>
-      </div>
-    );
-  }
+  useEffect(() => {
+    if (!done) return;
+    setLoading(true);
+    api.get(`/scans/${scanId}/reports/sast`)
+      .then(r => setData(r.data))
+      .catch(() => {})
+      .finally(() => setLoading(false));
+  }, [scanId, done]);
 
-  if (data.status === 'OK') {
+  // Show SonarQube summary metrics separately (from existing enriched report)
+  const sonarData = parseJson(sonarContent);
+  const sonarMetrics = sonarData?.status === 'OK' ? (() => {
     const measures = {};
-    (data.measures?.component?.measures || []).forEach(m => { measures[m.metric] = m.value; });
-    const bugs = parseInt(measures.bugs || '0');
-    const vulns = parseInt(measures.vulnerabilities || '0');
-    const codeSmells = parseInt(measures.code_smells || '0');
-    const hotspots = parseInt(measures.security_hotspots || '0');
-    const ncloc = parseInt(measures.ncloc || '0');
-    const issues = data.issues?.issues || [];
+    (sonarData.measures?.component?.measures || []).forEach(m => { measures[m.metric] = m.value; });
+    return measures;
+  })() : null;
 
-    const ratingLabel = v => ({ '1': 'A', '2': 'B', '3': 'C', '4': 'D', '5': 'E' }[String(Math.round(v))] || v);
-    const ratingColor = v => ({ '1': '#3fb950', '2': '#3fb950', '3': '#d29922', '4': '#f85149', '5': '#f85149' }[String(Math.round(v))] || '#8b949e');
-    const sevColor = s => (s === 'BLOCKER' || s === 'CRITICAL') ? '#f85149' : '#d29922';
+  const ratingLabel = v => ({ '1': 'A', '2': 'B', '3': 'C', '4': 'D', '5': 'E' }[String(Math.round(v))] || v);
+  const ratingColor = v => ({ '1': '#3fb950', '2': '#3fb950', '3': '#d29922', '4': '#f85149', '5': '#f85149' }[String(Math.round(v))] || '#8b949e');
 
-    return (
-      <div>
-        <div style={{ color: '#3fb950', fontWeight: 600, marginBottom: 16, fontSize: 13 }}>✓ SonarQube Analysis Complete — {data.projectKey}</div>
-        <div style={S.scannerStat}>
-          <div style={S.statCard}><div style={{ ...S.statNum, color: bugs > 0 ? '#f85149' : '#3fb950' }}>{bugs}</div><div style={S.statLabel}>Bugs</div></div>
-          <div style={S.statCard}><div style={{ ...S.statNum, color: vulns > 0 ? '#f85149' : '#3fb950' }}>{vulns}</div><div style={S.statLabel}>Vulnerabilities</div></div>
-          <div style={S.statCard}><div style={{ ...S.statNum, color: codeSmells > 0 ? '#d29922' : '#3fb950' }}>{codeSmells}</div><div style={S.statLabel}>Code Smells</div></div>
-          <div style={S.statCard}><div style={{ ...S.statNum, color: hotspots > 0 ? '#d29922' : '#3fb950' }}>{hotspots}</div><div style={S.statLabel}>Hotspots</div></div>
-          {ncloc > 0 && <div style={S.statCard}><div style={{ ...S.statNum, color: '#e6edf3', fontSize: 18 }}>{ncloc.toLocaleString()}</div><div style={S.statLabel}>Lines of Code</div></div>}
-          {measures.reliability_rating && <div style={S.statCard}><div style={{ ...S.statNum, color: ratingColor(measures.reliability_rating), fontSize: 22 }}>{ratingLabel(measures.reliability_rating)}</div><div style={S.statLabel}>Reliability</div></div>}
-          {measures.security_rating && <div style={S.statCard}><div style={{ ...S.statNum, color: ratingColor(measures.security_rating), fontSize: 22 }}>{ratingLabel(measures.security_rating)}</div><div style={S.statLabel}>Security</div></div>}
-        </div>
-        {issues.length > 0 && (
-          <div>
-            <div style={{ fontSize: 13, fontWeight: 600, color: '#e6edf3', marginBottom: 12 }}>Top Issues ({data.issues?.total} total)</div>
-            {issues.map((issue, i) => (
-              <div key={i} style={{ ...S.pre, marginBottom: 8, padding: 14 }}>
-                <div style={{ display: 'flex', gap: 8, marginBottom: 6 }}>
-                  <span style={{ color: sevColor(issue.severity), fontWeight: 700, fontSize: 11 }}>{issue.severity}</span>
-                  <span style={{ color: '#484f58', fontSize: 11 }}>{issue.type}</span>
-                </div>
-                <div style={{ color: '#e6edf3', fontSize: 13 }}>{issue.message}</div>
-                {issue.component && <div style={{ color: '#8b949e', fontSize: 11, marginTop: 4 }}>{issue.component.split(':').pop()}{issue.line ? `:${issue.line}` : ''}</div>}
-              </div>
-            ))}
-          </div>
-        )}
-        {issues.length === 0 && bugs === 0 && vulns === 0 && <div style={{ ...S.empty, color: '#3fb950' }}>✓ No bugs or vulnerabilities found.</div>}
-      </div>
-    );
-  }
-
-  return <pre style={S.pre}>{content}</pre>;
-}
-
-function TrivyFsReport({ content }) {
-  if (!content) return <div style={S.empty}>No dependency scan report available yet.</div>;
-  const data = parseJson(content);
-  if (!data) return <pre style={S.pre}>{content}</pre>;
-  const results = (data.Results || []).filter(r => r.Vulnerabilities?.length > 0);
-  if (results.length === 0) return <div style={{ ...S.empty, color: '#3fb950' }}>✓ No vulnerable dependencies found.</div>;
-  const totalVulns = results.reduce((sum, r) => sum + r.Vulnerabilities.length, 0);
-  const critical = results.reduce((sum, r) => sum + r.Vulnerabilities.filter(v => v.Severity === 'CRITICAL').length, 0);
-  const high = results.reduce((sum, r) => sum + r.Vulnerabilities.filter(v => v.Severity === 'HIGH').length, 0);
   return (
     <div>
+      {sonarData?.status === 'NOT_CONFIGURED' && (
+        <div style={{ marginBottom: 12, padding: '8px 14px', background: 'rgba(210,153,34,0.08)', border: '1px solid rgba(210,153,34,0.3)', borderRadius: 6, fontSize: 12, color: '#d29922' }}>
+          ⚠ SonarQube not configured — showing Semgrep results only. Go to Settings → SonarQube to enable.
+        </div>
+      )}
+      {sonarMetrics && (
+        <div style={{ marginBottom: 14, padding: '8px 14px', background: '#0d1117', border: '1px solid #30363d', borderRadius: 6, display: 'flex', gap: 16, flexWrap: 'wrap', alignItems: 'center' }}>
+          <span style={{ fontSize: 12, color: '#8b949e' }}>SonarQube:</span>
+          {['bugs','vulnerabilities','code_smells'].map(k => (
+            <span key={k} style={{ fontSize: 12, color: parseInt(sonarMetrics[k] || '0') > 0 ? '#f85149' : '#3fb950', fontWeight: 600 }}>{parseInt(sonarMetrics[k] || '0')} {k.replace('_', ' ')}</span>
+          ))}
+          {sonarMetrics.security_rating && <span style={{ fontSize: 12, color: ratingColor(sonarMetrics.security_rating), fontWeight: 700 }}>Security: {ratingLabel(sonarMetrics.security_rating)}</span>}
+          {sonarMetrics.reliability_rating && <span style={{ fontSize: 12, color: ratingColor(sonarMetrics.reliability_rating), fontWeight: 700 }}>Reliability: {ratingLabel(sonarMetrics.reliability_rating)}</span>}
+        </div>
+      )}
+      {!done ? (
+        <div style={S.empty}>SAST report available once scan completes.</div>
+      ) : loading ? (
+        <div style={S.loading}>Merging SonarQube + Semgrep results...</div>
+      ) : !data ? (
+        <div style={S.empty}>No SAST data available yet.</div>
+      ) : data.totalFindings === 0 ? (
+        <div style={{ ...S.empty, color: '#3fb950' }}>✓ No SAST issues found across both scanners.</div>
+      ) : (
+        <>
+          <MergedBanner left="sonarqube" right="semgrep" leftCount={data.sonarCount} rightCount={data.semgrepCount} bothCount={data.bothCount} />
+          <div style={S.scannerStat}>
+            {data.critical > 0 && <div style={S.statCard}><div style={{ ...S.statNum, color: '#f85149' }}>{data.critical}</div><div style={S.statLabel}>CRITICAL</div></div>}
+            {data.high > 0 && <div style={S.statCard}><div style={{ ...S.statNum, color: '#d29922' }}>{data.high}</div><div style={S.statLabel}>HIGH</div></div>}
+            <div style={S.statCard}><div style={S.statNum}>{data.totalFindings}</div><div style={S.statLabel}>Total Issues</div></div>
+            {data.bothCount > 0 && <div style={S.statCard}><div style={{ ...S.statNum, color: '#3fb950' }}>{data.bothCount}</div><div style={S.statLabel}>Confirmed</div></div>}
+          </div>
+          {data.items.map((item, i) => (
+            <div key={i} style={{ background: '#0d1117', border: `1px solid ${item.sources.length > 1 ? 'rgba(63,185,80,0.3)' : '#21262d'}`, borderRadius: 6, padding: 14, marginBottom: 8 }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                <span style={{ background: 'rgba(139,148,158,0.1)', border: '1px solid #30363d', borderRadius: 3, padding: '1px 7px', fontSize: 10, color: SEV_COLOR_ALL[item.severity] || '#8b949e', fontWeight: 700 }}>{item.severity}</span>
+                {item.sources.map(src => <SourceBadge key={src} src={src} />)}
+                {item.sources.length > 1 && <ConfirmedBadge />}
+                {item.ruleId && <span style={{ fontSize: 10, color: '#484f58', fontFamily: 'monospace' }}>{item.ruleId}</span>}
+              </div>
+              <div style={{ color: '#e6edf3', fontSize: 13, marginTop: 6, lineHeight: 1.5 }}>{item.message}</div>
+              {item.file && <div style={{ color: '#8b949e', fontSize: 11, marginTop: 4 }}>{item.file}{item.line ? `:${item.line}` : ''}</div>}
+            </div>
+          ))}
+        </>
+      )}
+    </div>
+  );
+}
+
+const SOURCE_BADGE = {
+  trivy:     { label: 'Trivy',    bg: 'rgba(210,153,34,0.15)',  border: 'rgba(210,153,34,0.4)',  color: '#d29922' },
+  'owasp-dc': { label: 'OWASP DC', bg: 'rgba(248,81,73,0.12)',   border: 'rgba(248,81,73,0.35)',  color: '#f85149' },
+};
+const SEV_DEP_COLOR = { CRITICAL: '#f85149', HIGH: '#d29922', MEDIUM: '#388bfd', LOW: '#8b949e', UNKNOWN: '#484f58' };
+
+function DependenciesReport({ scanId, done }) {
+  const [data, setData] = useState(null);
+  const [loading, setLoading] = useState(false);
+
+  useEffect(() => {
+    if (!done) return;
+    setLoading(true);
+    api.get(`/scans/${scanId}/reports/dependencies`)
+      .then(r => setData(r.data))
+      .catch(() => {})
+      .finally(() => setLoading(false));
+  }, [scanId, done]);
+
+  if (!done) return <div style={S.empty}>Dependency report available once scan completes.</div>;
+  if (loading) return <div style={S.loading}>Merging Trivy + OWASP Dependency-Check results...</div>;
+  if (!data) return <div style={S.empty}>No dependency scan data available yet.</div>;
+  if (data.totalFindings === 0) return <div style={{ ...S.empty, color: '#3fb950' }}>✓ No vulnerable dependencies found across both scanners.</div>;
+
+  const critical = data.items.filter(i => i.severity === 'CRITICAL').length;
+  const high = data.items.filter(i => i.severity === 'HIGH').length;
+
+  return (
+    <div>
+      {/* Tool coverage banner */}
+      <div style={{ marginBottom: 14, padding: '8px 14px', background: '#0d1117', border: '1px solid #30363d', borderRadius: 6, display: 'flex', gap: 16, flexWrap: 'wrap', alignItems: 'center' }}>
+        <span style={{ fontSize: 12, color: '#8b949e' }}>Scanners:</span>
+        <span style={{ fontSize: 12, color: '#d29922', fontWeight: 600 }}>📦 Trivy FS — {data.trivyCount} CVEs</span>
+        <span style={{ fontSize: 12, color: '#f85149', fontWeight: 600 }}>🔒 OWASP DC — {data.owaspDcCount} CVEs</span>
+        {data.bothCount > 0 && <span style={{ fontSize: 12, color: '#3fb950', fontWeight: 600 }}>✦ {data.bothCount} confirmed by both</span>}
+        <span style={{ fontSize: 11, color: '#58b945e8', marginLeft: 'auto' }}>✦ Enriched with OSV.dev</span>
+      </div>
+
+      {/* Stat cards */}
       <div style={S.scannerStat}>
         {critical > 0 && <div style={S.statCard}><div style={{ ...S.statNum, color: '#f85149' }}>{critical}</div><div style={S.statLabel}>CRITICAL</div></div>}
         {high > 0 && <div style={S.statCard}><div style={{ ...S.statNum, color: '#d29922' }}>{high}</div><div style={S.statLabel}>HIGH</div></div>}
-        <div style={S.statCard}><div style={S.statNum}>{totalVulns}</div><div style={S.statLabel}>Total CVEs</div></div>
+        <div style={S.statCard}><div style={S.statNum}>{data.totalFindings}</div><div style={S.statLabel}>Unique CVEs</div></div>
+        {data.bothCount > 0 && <div style={S.statCard}><div style={{ ...S.statNum, color: '#3fb950' }}>{data.bothCount}</div><div style={S.statLabel}>Confirmed</div></div>}
       </div>
-      {results.map((r, i) => (
-        <div key={i} style={{ ...S.pre, marginBottom: 10, padding: 16 }}>
-          <div style={{ color: '#e6edf3', fontWeight: 600, marginBottom: 8 }}>{r.Target} <span style={{ fontSize: 11, color: '#8b949e' }}>({r.Type})</span></div>
-          {r.Vulnerabilities.map((v, j) => (
-            <div key={j} style={{ marginBottom: 8, paddingBottom: 8, borderBottom: j < r.Vulnerabilities.length - 1 ? '1px solid #21262d' : 'none' }}>
-              <span style={{ color: v.Severity === 'CRITICAL' ? '#f85149' : '#d29922', fontWeight: 600 }}>{v.VulnerabilityID}</span>
-              <span style={{ color: '#8b949e', fontSize: 11, marginLeft: 8 }}>{v.Severity}</span>
-              <span style={{ color: '#8b949e', fontSize: 11, marginLeft: 8 }}>{v.PkgName} {v.InstalledVersion}</span>
-              {v.Title && <div style={{ color: '#8b949e', fontSize: 12, marginTop: 4 }}>{v.Title}</div>}
-              {v.FixedVersion && <div style={{ color: '#3fb950', fontSize: 11, marginTop: 2 }}>Fix: {v.FixedVersion}</div>}
-            </div>
-          ))}
+
+      {/* CVE list */}
+      {data.items.map((item, i) => (
+        <div key={i} style={{ background: '#0d1117', border: `1px solid ${item.sources.length > 1 ? 'rgba(63,185,80,0.3)' : '#21262d'}`, borderRadius: 6, padding: 14, marginBottom: 8 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+            <span style={{ color: SEV_DEP_COLOR[item.severity] || '#8b949e', fontWeight: 700, fontSize: 13 }}>{item.cveId}</span>
+            <span style={{ background: 'rgba(139,148,158,0.1)', border: '1px solid #30363d', borderRadius: 3, padding: '1px 7px', fontSize: 10, color: SEV_DEP_COLOR[item.severity] || '#8b949e', fontWeight: 600 }}>{item.severity}</span>
+            {item.cvssScore && <span style={{ background: '#21262d', border: '1px solid #30363d', borderRadius: 3, padding: '1px 6px', fontSize: 10, color: '#d29922' }}>CVSS {item.cvssScore}</span>}
+            {item.sources.map(src => {
+              const b = SOURCE_BADGE[src] || { label: src, bg: '#21262d', border: '#30363d', color: '#8b949e' };
+              return <span key={src} style={{ background: b.bg, border: `1px solid ${b.border}`, borderRadius: 3, padding: '1px 7px', fontSize: 10, color: b.color, fontWeight: 600 }}>{b.label}</span>;
+            })}
+            {item.sources.length > 1 && <span style={{ background: 'rgba(63,185,80,0.12)', border: '1px solid rgba(63,185,80,0.3)', borderRadius: 3, padding: '1px 7px', fontSize: 10, color: '#3fb950', fontWeight: 700 }}>✓ CONFIRMED</span>}
+          </div>
+          {item.pkg && <div style={{ color: '#8b949e', fontSize: 11, marginTop: 4 }}>{item.pkg} {item.installedVersion && `v${item.installedVersion}`} {item.target && `· ${item.target}`}</div>}
+          {item.title && item.title !== item.cveId && <div style={{ color: '#c9d1d9', fontSize: 12, marginTop: 4, lineHeight: 1.5 }}>{item.title}</div>}
+          <div style={{ display: 'flex', gap: 10, marginTop: 6, flexWrap: 'wrap', alignItems: 'center' }}>
+            {item.fixedVersion && <span style={{ color: '#3fb950', fontSize: 11 }}>✓ Fix: {item.fixedVersion}</span>}
+            {item.references?.slice(0, 2).map((ref, ri) => (
+              <a key={ri} href={ref} target="_blank" rel="noreferrer" style={{ color: '#58a6ff', fontSize: 11 }}>Advisory ↗</a>
+            ))}
+          </div>
         </div>
       ))}
     </div>
   );
 }
 
-function TrivyReport({ content }) {
-  if (!content) return <div style={S.empty}>No Trivy report. (Runs only if Dockerfile is present)</div>;
-  const lines = content.split('\n');
+function ContainerReport({ scanId, done, hasDockerfile }) {
+  const [data, setData] = useState(null);
+  const [loading, setLoading] = useState(false);
+
+  useEffect(() => {
+    if (!done || !hasDockerfile) return;
+    setLoading(true);
+    api.get(`/scans/${scanId}/reports/container`)
+      .then(r => setData(r.data))
+      .catch(() => {})
+      .finally(() => setLoading(false));
+  }, [scanId, done, hasDockerfile]);
+
+  if (!hasDockerfile) return <div style={S.empty}>Container scan skipped — no Dockerfile detected.</div>;
+  if (!done) return <div style={S.empty}>Container report available once scan completes.</div>;
+  if (loading) return <div style={S.loading}>Merging Trivy image + Grype results...</div>;
+  if (!data) return <div style={S.empty}>No container scan data. Docker may not be available in Jenkins.</div>;
+  if (data.totalFindings === 0) return <div style={{ ...S.empty, color: '#3fb950' }}>✓ No container CVEs found across both scanners.</div>;
+
   return (
-    <pre style={S.pre}>
-      {lines.map((line, i) => {
-        const color = line.includes('CRITICAL') ? '#f85149' : line.includes('HIGH') ? '#d29922' : line.includes('MEDIUM') ? '#388bfd' : '#e6edf3';
-        return <span key={i} style={{ color }}>{line}{'\n'}</span>;
-      })}
-    </pre>
+    <div>
+      <MergedBanner left="trivy" right="grype" leftCount={data.trivyCount} rightCount={data.grypeCount} bothCount={data.bothCount} />
+      <div style={S.scannerStat}>
+        {data.critical > 0 && <div style={S.statCard}><div style={{ ...S.statNum, color: '#f85149' }}>{data.critical}</div><div style={S.statLabel}>CRITICAL</div></div>}
+        {data.high > 0 && <div style={S.statCard}><div style={{ ...S.statNum, color: '#d29922' }}>{data.high}</div><div style={S.statLabel}>HIGH</div></div>}
+        <div style={S.statCard}><div style={S.statNum}>{data.totalFindings}</div><div style={S.statLabel}>Unique CVEs</div></div>
+        {data.bothCount > 0 && <div style={S.statCard}><div style={{ ...S.statNum, color: '#3fb950' }}>{data.bothCount}</div><div style={S.statLabel}>Confirmed</div></div>}
+      </div>
+      {data.items.map((item, i) => (
+        <div key={i} style={{ background: '#0d1117', border: `1px solid ${item.sources.length > 1 ? 'rgba(63,185,80,0.3)' : '#21262d'}`, borderRadius: 6, padding: 14, marginBottom: 8 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+            <span style={{ color: SEV_COLOR_ALL[item.severity] || '#8b949e', fontWeight: 700, fontSize: 13 }}>{item.cveId}</span>
+            <span style={{ background: 'rgba(139,148,158,0.1)', border: '1px solid #30363d', borderRadius: 3, padding: '1px 7px', fontSize: 10, color: SEV_COLOR_ALL[item.severity] || '#8b949e', fontWeight: 600 }}>{item.severity}</span>
+            {item.sources.map(src => <SourceBadge key={src} src={src} />)}
+            {item.sources.length > 1 && <ConfirmedBadge />}
+          </div>
+          {(item.pkg || item.target) && <div style={{ color: '#8b949e', fontSize: 11, marginTop: 4 }}>{item.pkg} {item.installedVersion && `v${item.installedVersion}`}{item.target && ` · ${item.target}`}</div>}
+          {item.title && item.title !== item.cveId && <div style={{ color: '#c9d1d9', fontSize: 12, marginTop: 4, lineHeight: 1.5 }}>{item.title}</div>}
+          {item.fixedVersion && <div style={{ color: '#3fb950', fontSize: 11, marginTop: 5 }}>✓ Fix: {item.fixedVersion}</div>}
+        </div>
+      ))}
+    </div>
   );
 }
 
@@ -361,6 +493,87 @@ function CheckovReport({ content }) {
           </div>
           <div style={{ color: '#e6edf3', fontSize: 13, marginBottom: 4 }}>{f.check?.name || f.check_id}</div>
           <div style={{ color: '#8b949e', fontSize: 11 }}>{f.repo_file_path || f.file_path}{f.file_line_range && ` (lines ${f.file_line_range[0]}-${f.file_line_range[1]})`}</div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+// ── Correlated Report ─────────────────────────────────────────────────────────
+const SEV_COLOR = { CRITICAL: '#f85149', HIGH: '#d29922', MEDIUM: '#388bfd', LOW: '#8b949e', UNKNOWN: '#484f58' };
+const TOOL_CHIP = { gitleaks: { label: '🔑 Secrets', color: '#f85149' }, sonarqube: { label: '🔍 SAST', color: '#388bfd' }, 'trivy-fs': { label: '📦 Deps', color: '#d29922' }, checkov: { label: '🏗️ IaC', color: '#3fb950' } };
+
+function CorrelatedReport({ scanId, done }) {
+  const [data, setData] = useState(null);
+  const [loading, setLoading] = useState(false);
+
+  useEffect(() => {
+    if (!done) return;
+    setLoading(true);
+    api.get(`/scans/${scanId}/reports/correlated`)
+      .then(r => setData(r.data))
+      .catch(() => {})
+      .finally(() => setLoading(false));
+  }, [scanId, done]);
+
+  if (!done) return <div style={S.empty}>Correlated view available once scan completes.</div>;
+  if (loading) return <div style={S.loading}>Building correlation map...</div>;
+  if (!data) return <div style={S.empty}>No findings to correlate yet.</div>;
+
+  const { totalFindings, uniqueFiles, multiToolHits, criticalCount, highCount, toolBreakdown, items } = data;
+
+  if (totalFindings === 0) return <div style={{ ...S.empty, color: '#3fb950' }}>✓ No findings across all tools.</div>;
+
+  return (
+    <div>
+      {/* Summary cards */}
+      <div style={{ display: 'flex', gap: 10, marginBottom: 16, flexWrap: 'wrap' }}>
+        <div style={S.statCard}><div style={{ ...S.statNum, fontSize: 22 }}>{totalFindings}</div><div style={S.statLabel}>Total Findings</div></div>
+        <div style={S.statCard}><div style={{ ...S.statNum, fontSize: 22, color: '#f85149' }}>{criticalCount}</div><div style={S.statLabel}>Critical Files</div></div>
+        <div style={S.statCard}><div style={{ ...S.statNum, fontSize: 22, color: '#d29922' }}>{highCount}</div><div style={S.statLabel}>High Files</div></div>
+        <div style={S.statCard}><div style={{ ...S.statNum, fontSize: 22, color: '#58a6ff' }}>{multiToolHits}</div><div style={S.statLabel}>Multi-Tool Hits</div></div>
+      </div>
+
+      {/* Tool breakdown */}
+      <div style={{ display: 'flex', gap: 8, marginBottom: 20, flexWrap: 'wrap' }}>
+        {Object.entries(toolBreakdown).map(([tool, count]) => count > 0 && (
+          <span key={tool} style={{ background: '#21262d', border: '1px solid #30363d', borderRadius: 20, padding: '4px 12px', fontSize: 11, color: '#8b949e' }}>
+            {tool}: <strong style={{ color: '#e6edf3' }}>{count}</strong>
+          </span>
+        ))}
+      </div>
+
+      {multiToolHits > 0 && (
+        <div style={{ marginBottom: 12, padding: '8px 14px', background: 'rgba(248,81,73,0.07)', border: '1px solid rgba(248,81,73,0.25)', borderRadius: 6, fontSize: 12, color: '#f85149' }}>
+          ⚠ {multiToolHits} file{multiToolHits > 1 ? 's' : ''} flagged by multiple scanners — highest priority to fix
+        </div>
+      )}
+
+      {/* Findings list */}
+      {items.map((item, i) => (
+        <div key={i} style={{
+          ...S.pre, marginBottom: 8, padding: 14,
+          border: item.multiTool ? `1px solid ${SEV_COLOR[item.severity] || '#30363d'}` : '1px solid #21262d',
+          background: item.multiTool ? 'rgba(248,81,73,0.04)' : '#0d1117',
+        }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8, flexWrap: 'wrap' }}>
+            <span style={{ color: SEV_COLOR[item.severity] || '#8b949e', fontWeight: 700, fontSize: 11 }}>{item.severity}</span>
+            {item.multiTool && <span style={{ background: 'rgba(248,81,73,0.15)', border: '1px solid rgba(248,81,73,0.3)', borderRadius: 10, padding: '1px 8px', fontSize: 10, color: '#f85149', fontWeight: 700 }}>MULTI-TOOL</span>}
+            {item.tools.map(t => {
+              const cfg = TOOL_CHIP[t] || { label: t, color: '#8b949e' };
+              return <span key={t} style={{ background: '#21262d', border: `1px solid ${cfg.color}33`, borderRadius: 10, padding: '1px 8px', fontSize: 10, color: cfg.color }}>{cfg.label}</span>;
+            })}
+          </div>
+          <div style={{ color: '#e6edf3', fontSize: 12, fontFamily: 'monospace', marginBottom: 8 }}>{item.file || '(no file)'}</div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+            {item.findings.map((f, fi) => (
+              <div key={fi} style={{ fontSize: 11, color: '#8b949e', paddingLeft: 10, borderLeft: `2px solid ${SEV_COLOR[f.severity] || '#30363d'}` }}>
+                <span style={{ color: SEV_COLOR[f.severity] || '#8b949e', fontWeight: 600 }}>{f.severity}</span> · {f.title}
+                {f.line && <span style={{ color: '#484f58' }}> (line {f.line})</span>}
+                {f.fix && <span style={{ color: '#3fb950' }}> → fix: {f.fix}</span>}
+              </div>
+            ))}
+          </div>
         </div>
       ))}
     </div>
@@ -440,8 +653,10 @@ function PreAnalysisCard({ text }) {
   );
 }
 
+const RISK_COLOR = { CRITICAL: '#f85149', HIGH: '#d29922', MEDIUM: '#388bfd', LOW: '#3fb950' };
+
 function AiSummary({ scanId, ready }) {
-  const [summary, setSummary] = useState('');
+  const [result, setResult] = useState(null);
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState('');
 
@@ -450,7 +665,12 @@ function AiSummary({ scanId, ready }) {
     setErr('');
     try {
       const { data } = await api.get(`/scans/${scanId}/reports/ai`);
-      setSummary(data.summary || 'No summary available.');
+      const raw = data.summary || '';
+      try {
+        setResult(JSON.parse(raw));
+      } catch {
+        setResult({ rawText: raw });
+      }
     } catch (e) {
       setErr(e.response?.data?.error || 'Failed to load summary');
     } finally {
@@ -459,7 +679,7 @@ function AiSummary({ scanId, ready }) {
   };
 
   if (!ready) return <div style={S.empty}>Summary will be available once the scan completes.</div>;
-  if (!summary && !loading && !err) {
+  if (!result && !loading && !err) {
     return (
       <div>
         <div style={{ color: '#8b949e', fontSize: 13, marginBottom: 16 }}>Click to generate an AI-powered summary of all scan findings.</div>
@@ -469,9 +689,79 @@ function AiSummary({ scanId, ready }) {
       </div>
     );
   }
-  if (loading) return <div style={S.loading}>Generating summary...</div>;
+  if (loading) return <div style={S.loading}>Generating AI correlation analysis...</div>;
   if (err) return <div style={{ ...S.empty, color: '#f85149' }}>{err}</div>;
-  return <div style={S.aiBox}>{summary}</div>;
+  if (!result) return null;
+
+  // Fallback: raw text
+  if (result.error) return <div style={{ ...S.empty, color: '#f85149' }}>{result.error}</div>;
+  if (result.rawText) return <div style={S.aiBox}>{result.rawText}</div>;
+
+  const riskColor = RISK_COLOR[result.riskLevel] || '#8b949e';
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+      {/* Risk header */}
+      <div style={{ background: '#161b22', border: `1px solid ${riskColor}44`, borderRadius: 10, padding: '16px 20px', display: 'flex', alignItems: 'center', gap: 18 }}>
+        <div style={{ textAlign: 'center', flexShrink: 0 }}>
+          <div style={{ fontSize: 32, fontWeight: 800, color: riskColor, lineHeight: 1 }}>{result.riskLevel}</div>
+          <div style={{ fontSize: 11, color: '#8b949e', marginTop: 3 }}>RISK LEVEL</div>
+          {result.riskScore != null && (
+            <div style={{ marginTop: 6, height: 4, width: 80, background: '#21262d', borderRadius: 2, overflow: 'hidden' }}>
+              <div style={{ height: '100%', width: `${result.riskScore}%`, background: riskColor, borderRadius: 2 }} />
+            </div>
+          )}
+        </div>
+        <div style={{ flex: 1, fontSize: 13, color: '#e6edf3', lineHeight: 1.6 }}>{result.headline}</div>
+      </div>
+
+      {/* Top findings */}
+      {result.topFindings?.length > 0 && (
+        <div style={{ background: '#161b22', border: '1px solid #30363d', borderRadius: 10, padding: '14px 18px' }}>
+          <div style={{ fontSize: 11, fontWeight: 700, color: '#8b949e', letterSpacing: '0.07em', marginBottom: 12 }}>TOP FINDINGS</div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+            {result.topFindings.map((f, i) => (
+              <div key={i} style={{ display: 'flex', gap: 12, alignItems: 'flex-start' }}>
+                <span style={{ color: RISK_COLOR[f.severity] || '#8b949e', fontWeight: 700, fontSize: 11, flexShrink: 0, minWidth: 60 }}>{f.severity}</span>
+                <div style={{ flex: 1 }}>
+                  <div style={{ fontSize: 12, color: '#e6edf3' }}>{f.issue}</div>
+                  {f.fix && <div style={{ fontSize: 11, color: '#3fb950', marginTop: 3 }}>→ {f.fix}</div>}
+                  <div style={{ fontSize: 10, color: '#484f58', marginTop: 2 }}>{f.tool}</div>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Immediate actions */}
+      {result.immediateActions?.length > 0 && (
+        <div style={{ background: 'rgba(35,134,54,0.08)', border: '1px solid rgba(63,185,80,0.25)', borderRadius: 10, padding: '14px 18px' }}>
+          <div style={{ fontSize: 11, fontWeight: 700, color: '#3fb950', letterSpacing: '0.07em', marginBottom: 10 }}>IMMEDIATE ACTIONS</div>
+          <ol style={{ paddingLeft: 18, margin: 0, display: 'flex', flexDirection: 'column', gap: 6 }}>
+            {result.immediateActions.map((a, i) => (
+              <li key={i} style={{ fontSize: 12, color: '#e6edf3', lineHeight: 1.6 }}>{a}</li>
+            ))}
+          </ol>
+        </div>
+      )}
+
+      {/* By tool */}
+      {result.byTool && (
+        <div style={{ background: '#161b22', border: '1px solid #30363d', borderRadius: 10, padding: '14px 18px' }}>
+          <div style={{ fontSize: 11, fontWeight: 700, color: '#8b949e', letterSpacing: '0.07em', marginBottom: 12 }}>BY SCANNER</div>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: 10 }}>
+            {[['🔑 Secrets', result.byTool.secrets], ['🔍 SAST', result.byTool.sast], ['📦 Dependencies', result.byTool.dependencies], ['🐳 Container', result.byTool.container]].map(([label, text]) => text && (
+              <div key={label} style={{ background: '#0d1117', border: '1px solid #21262d', borderRadius: 6, padding: '10px 12px' }}>
+                <div style={{ fontSize: 11, color: '#58a6ff', fontWeight: 600, marginBottom: 5 }}>{label}</div>
+                <div style={{ fontSize: 11, color: '#8b949e', lineHeight: 1.5 }}>{text}</div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  );
 }
 
 // ── Main Page ──────────────────────────────────────────────────────────────────
@@ -648,10 +938,11 @@ export default function ScanDetailPage() {
       </div>
 
       <div style={{ animation: 'fadeIn 0.2s ease' }}>
-        {tab === 'gitleaks' && <GitleaksReport content={reports.gitleaks} />}
-        {tab === 'semgrep' && <SonarQubeReport content={reports.semgrep} />}
-        {tab === 'owasp' && <TrivyFsReport content={reports.owasp} />}
-        {tab === 'trivy' && <TrivyReport content={reports.trivy} />}
+        {tab === 'correlated' && <CorrelatedReport scanId={id} done={done} />}
+        {tab === 'gitleaks' && <SecretsReport scanId={id} done={done} />}
+        {tab === 'semgrep' && <SastReport scanId={id} done={done} sonarContent={reports.semgrep} />}
+        {tab === 'owasp' && <DependenciesReport scanId={id} done={done} />}
+        {tab === 'trivy' && <ContainerReport scanId={id} done={done} hasDockerfile={scan?.has_dockerfile} />}
         {tab === 'checkov' && <CheckovReport content={reports.checkov} />}
         {tab === 'ai' && <AiSummary scanId={id} ready={done} />}
       </div>

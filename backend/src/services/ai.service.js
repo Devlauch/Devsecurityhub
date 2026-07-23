@@ -48,53 +48,62 @@ async function callAI(prompt, apiKey) {
   }
 }
 
-async function summarizeFindings(gitleaks, semgrep, owasp, trivy, apiKey) {
-  if (!apiKey) return 'No AI key configured — add one in Settings to get an AI summary.';
+async function summarizeFindings(gitleaks, semgrep, owasp, trivy, apiKey, correlated) {
+  if (!apiKey) return JSON.stringify({ error: 'No AI key configured — add one in Settings to get an AI summary.' });
 
-  const gitleaksSummary = (() => {
-    try {
-      const parsed = JSON.parse(gitleaks || '[]');
-      return Array.isArray(parsed) ? `${parsed.length} secrets found` : 'unavailable';
-    } catch { return gitleaks ? 'report available' : 'not run'; }
-  })();
+  const secretCount = (() => { try { const p = JSON.parse(gitleaks || '[]'); return Array.isArray(p) ? p.length : 0; } catch { return 0; } })();
+  const sonarIssues = (() => { try { const p = JSON.parse(semgrep || '{}'); return (p.issues?.issues || []).length; } catch { return 0; } })();
+  const trivyResults = (() => { try { const p = JSON.parse(owasp || '{}'); return (p.Results || []).reduce((s, r) => s + (r.Vulnerabilities?.length || 0), 0); } catch { return 0; } })();
+  const trivyCritical = trivy ? (trivy.match(/CRITICAL/g) || []).length : 0;
 
-  const semgrepSummary = (() => {
-    try {
-      const parsed = JSON.parse(semgrep || '{"results":[]}');
-      return `${(parsed.results || []).length} issues found`;
-    } catch { return semgrep ? 'report available' : 'not run'; }
-  })();
+  const correlatedSummary = correlated ? `
+Cross-tool correlation found ${correlated.multiToolHits} files flagged by multiple scanners (highest risk).
+Top correlated findings:
+${(correlated.items || []).slice(0, 5).map(i =>
+  `  - ${i.file || 'unknown file'} → tools: [${i.tools.join(', ')}] → severity: ${i.severity}`
+).join('\n')}` : '';
 
-  const owaspSummary = (() => {
-    try {
-      const parsed = JSON.parse(owasp || '{"dependencies":[]}');
-      const vulnCount = (parsed.dependencies || []).filter(d => d.vulnerabilities?.length).length;
-      return `${vulnCount} vulnerable dependencies`;
-    } catch { return owasp ? 'report available' : 'not run'; }
-  })();
+  const prompt = `You are a senior application security engineer. Analyze these automated security scan results and respond ONLY with valid JSON (no markdown, no explanation outside JSON).
 
-  const trivySummary = trivy
-    ? trivy.includes('CRITICAL') || trivy.includes('HIGH')
-      ? 'critical/high CVEs found in container'
-      : 'no high/critical CVEs in container'
-    : 'not run (no Dockerfile)';
+SCAN RESULTS:
+- Gitleaks secrets scanner: ${secretCount} secrets/credentials exposed
+- SonarQube SAST: ${sonarIssues} code issues found
+- Trivy filesystem: ${trivyResults} vulnerable dependencies
+- Trivy container: ${trivyCritical > 0 ? `${trivyCritical} CRITICAL CVEs in container image` : trivy ? 'no critical CVEs' : 'not run (no Dockerfile)'}
+${correlatedSummary}
 
-  const prompt = `You are a security analyst. Summarize these security scan results in 4-6 bullet points. Be concise and actionable.
+Respond with this exact JSON structure:
+{
+  "riskLevel": "CRITICAL|HIGH|MEDIUM|LOW",
+  "riskScore": <number 0-100>,
+  "headline": "<one sentence overall assessment>",
+  "topFindings": [
+    { "severity": "CRITICAL|HIGH|MEDIUM", "tool": "<tool name>", "issue": "<specific finding>", "fix": "<concrete fix action>" }
+  ],
+  "immediateActions": ["<action 1>", "<action 2>", "<action 3>"],
+  "byTool": {
+    "secrets": "<1-sentence assessment>",
+    "sast": "<1-sentence assessment>",
+    "dependencies": "<1-sentence assessment>",
+    "container": "<1-sentence assessment>"
+  }
+}
 
-Gitleaks (secrets): ${gitleaksSummary}
-Semgrep (SAST): ${semgrepSummary}
-OWASP Dependency Check: ${owaspSummary}
-Trivy (container): ${trivySummary}
-
-Provide:
-- Overall risk level (Critical/High/Medium/Low)
-- Key findings per scanner
-- Top 2-3 immediate actions to take`;
+topFindings should have 3-5 items. immediateActions should have exactly 3 items. Be specific, not generic.`;
 
   try {
-    return await callAI(prompt, apiKey);
+    const raw = await callAI(prompt, apiKey);
+    // Validate it's parseable JSON, return raw string for frontend to parse
+    JSON.parse(raw);
+    return raw;
   } catch (err) {
-    return `AI summary failed: ${err.message}`;
+    // If JSON parse fails, wrap the text response
+    try {
+      const text = await callAI(prompt, apiKey);
+      return JSON.stringify({ error: null, rawText: text });
+    } catch (e) {
+      return JSON.stringify({ error: `AI summary failed: ${e.message}` });
+    }
   }
 }
 

@@ -49,6 +49,32 @@ function generateSecurityJenkinsfile(repoUrl, branch, jobName) {
                             mv /tmp/sonar-extract/sonar-scanner-* \$HOME/sec-tools/sonar-scanner 2>/dev/null || true && \\
                             rm -rf /tmp/sonar.zip /tmp/sonar-extract 2>/dev/null || true
                         fi
+
+                        # OWASP Dependency-Check (disabled — requires NVD API key; re-enable when ready)
+                        # if [ ! -f "\$HOME/sec-tools/dependency-check/bin/dependency-check.sh" ]; then
+                        #     DC_VERSION="10.0.4"
+                        #     curl -sSL "https://github.com/jeremylong/DependencyCheck/releases/download/v\${DC_VERSION}/dependency-check-\${DC_VERSION}-release.zip" \\
+                        #         -o /tmp/dc.zip 2>/dev/null && \\
+                        #     unzip -q /tmp/dc.zip -d \$HOME/sec-tools/ 2>/dev/null && \\
+                        #     rm -f /tmp/dc.zip 2>/dev/null || true
+                        # fi
+
+                        # TruffleHog (secrets scanner)
+                        if [ ! -x "\$HOME/sec-tools/bin/trufflehog" ]; then
+                            curl -sSfL https://raw.githubusercontent.com/trufflesecurity/trufflehog/main/scripts/install.sh \\
+                                | sh -s -- -b \$HOME/sec-tools/bin 2>/dev/null || true
+                        fi
+
+                        # Semgrep (SAST)
+                        if ! python3 -m semgrep --version > /dev/null 2>&1; then
+                            python3 -m pip install semgrep --quiet 2>/dev/null || true
+                        fi
+
+                        # Grype (container/image vulnerability scanner)
+                        if ! which grype 2>/dev/null && [ ! -x "\$HOME/sec-tools/bin/grype" ]; then
+                            curl -sSfL https://raw.githubusercontent.com/anchore/grype/main/install.sh \\
+                                | sh -s -- -b \$HOME/sec-tools/bin 2>/dev/null || true
+                        fi
                     '''
                 }
             }
@@ -63,6 +89,26 @@ function generateSecurityJenkinsfile(repoUrl, branch, jobName) {
                             echo '[]' > gitleaks-report.json
                     '''
                     archiveArtifacts artifacts: 'gitleaks-report.json', allowEmptyArchive: true
+                }
+            }
+        }
+
+        stage('Secrets Scan (TruffleHog)') {
+            steps {
+                catchError(buildResult: 'SUCCESS', stageResult: 'UNSTABLE') {
+                    sh '''
+                        export PATH=\$HOME/sec-tools/bin:\$PATH
+                        if which trufflehog 2>/dev/null; then
+                            trufflehog filesystem . --json --no-update --only-verified=false 2>/dev/null \\
+                                | head -2000 > trufflehog-report.jsonl || true
+                            if [ ! -s trufflehog-report.jsonl ]; then
+                                echo '' > trufflehog-report.jsonl
+                            fi
+                        else
+                            echo '' > trufflehog-report.jsonl
+                        fi
+                    '''
+                    archiveArtifacts artifacts: 'trufflehog-report.jsonl', allowEmptyArchive: true
                 }
             }
         }
@@ -94,6 +140,27 @@ function generateSecurityJenkinsfile(repoUrl, branch, jobName) {
             }
         }
 
+        stage('SAST (Semgrep)') {
+            steps {
+                catchError(buildResult: 'SUCCESS', stageResult: 'UNSTABLE') {
+                    sh '''
+                        export PATH=\$HOME/.local/bin:\$HOME/sec-tools/bin:\$PATH
+                        SEMGREP=\$(which semgrep 2>/dev/null || echo '')
+                        if [ -n "\$SEMGREP" ]; then
+                            semgrep --config=auto . --json --output semgrep-sast-report.json \\
+                                --timeout 60 --max-memory 512 --no-git-ignore 2>/dev/null || \\
+                            semgrep --config=p/default . --json --output semgrep-sast-report.json \\
+                                --timeout 60 2>/dev/null || \\
+                            echo '{"results":[],"errors":[]}' > semgrep-sast-report.json
+                        else
+                            echo '{"results":[],"errors":[]}' > semgrep-sast-report.json
+                        fi
+                    '''
+                    archiveArtifacts artifacts: 'semgrep-sast-report.json', allowEmptyArchive: true
+                }
+            }
+        }
+
         stage('Dependency Scan (Trivy FS)') {
             steps {
                 catchError(buildResult: 'SUCCESS', stageResult: 'UNSTABLE') {
@@ -108,20 +175,46 @@ function generateSecurityJenkinsfile(repoUrl, branch, jobName) {
             }
         }
 
+        // OWASP DC stage disabled — NVD API key required; re-enable once NVD_API_KEY is set in Jenkins globals
+        // stage('Dependency Scan (OWASP DC)') {
+        //     steps {
+        //         catchError(buildResult: 'SUCCESS', stageResult: 'UNSTABLE') {
+        //             sh '''
+        //                 DC=$HOME/sec-tools/dependency-check/bin/dependency-check.sh
+        //                 if [ -f "$DC" ]; then
+        //                     $DC --project "${JOB}" --scan . --format JSON --out . --noupdate 2>/dev/null || \\
+        //                     $DC --project "\${JOB}" --scan . --format JSON --out . \\
+        //                         \${NVD_API_KEY:+--nvdApiKey "\$NVD_API_KEY"} 2>/dev/null || true
+        //                     mv dependency-check-report.json owasp-dc-report.json 2>/dev/null || \\
+        //                         echo '{"dependencies":[],"_error":"NVD update failed"}' > owasp-dc-report.json
+        //                 else
+        //                     echo '{"dependencies":[]}' > owasp-dc-report.json
+        //                 fi
+        //             '''
+        //             archiveArtifacts artifacts: 'owasp-dc-report.json', allowEmptyArchive: true
+        //         }
+        //     }
+        // }
+
         stage('IaC Scan (Checkov)') {
             steps {
                 catchError(buildResult: 'SUCCESS', stageResult: 'UNSTABLE') {
                     sh '''
                         export PATH=\$HOME/.local/bin:\$PATH
-                        python3 -m checkov -d . --framework dockerfile,docker_compose --output json --soft-fail > checkov-report.json 2>/dev/null || \\
+                        CHECKOV=\$(which checkov 2>/dev/null || echo '')
+                        if [ -n "\$CHECKOV" ]; then
+                            checkov -d . --framework dockerfile,docker_compose --output json --soft-fail > checkov-report.json 2>/dev/null || \\
+                                echo '{"results":{"passed_checks":[],"failed_checks":[]},"summary":{"passed":0,"failed":0,"skipped":0}}' > checkov-report.json
+                        else
                             echo '{"results":{"passed_checks":[],"failed_checks":[]},"summary":{"passed":0,"failed":0,"skipped":0}}' > checkov-report.json
+                        fi
                     '''
                     archiveArtifacts artifacts: 'checkov-report.json', allowEmptyArchive: true
                 }
             }
         }
 
-        stage('Container Scan (Trivy)') {
+        stage('Container Scan (Trivy + Grype)') {
             when { expression { return fileExists('Dockerfile') } }
             steps {
                 catchError(buildResult: 'SUCCESS', stageResult: 'UNSTABLE') {
@@ -129,13 +222,28 @@ function generateSecurityJenkinsfile(repoUrl, branch, jobName) {
                         export PATH=\$HOME/sec-tools/bin:\$PATH
                         if which docker 2>/dev/null && docker info > /dev/null 2>&1; then
                             docker build -t sec-scan-image:local . 2>/dev/null || true
+
+                            # Trivy image scan (JSON + plain text)
+                            trivy image --exit-code 0 --severity HIGH,CRITICAL --format json sec-scan-image:local \\
+                                > trivy-image-report.json 2>/dev/null || \\
+                                echo '{"SchemaVersion":2,"Results":[]}' > trivy-image-report.json
                             trivy image --exit-code 0 --severity HIGH,CRITICAL --format table sec-scan-image:local \\
-                                | tee trivy-report.txt || echo 'Trivy scan failed' > trivy-report.txt
+                                > trivy-report.txt 2>/dev/null || echo 'Trivy scan failed' > trivy-report.txt
+
+                            # Grype image scan
+                            if which grype 2>/dev/null; then
+                                grype sec-scan-image:local -o json > grype-report.json 2>/dev/null || \\
+                                    echo '{"matches":[]}' > grype-report.json
+                            else
+                                echo '{"matches":[]}' > grype-report.json
+                            fi
                         else
+                            echo '{"SchemaVersion":2,"Results":[]}' > trivy-image-report.json
+                            echo '{"matches":[]}' > grype-report.json
                             echo 'Docker not available — container scan skipped' > trivy-report.txt
                         fi
                     '''
-                    archiveArtifacts artifacts: 'trivy-report.txt', allowEmptyArchive: true
+                    archiveArtifacts artifacts: 'trivy-image-report.json,grype-report.json,trivy-report.txt', allowEmptyArchive: true
                 }
             }
         }

@@ -2,7 +2,10 @@
   "permissions": {
     "allow": [
       "Bash(wsl -d Ubuntu-24.04 -- docker compose -f /home/pavan/project/devsecurityhub/docker-compose.yml ps)",
-      "PowerShell(wsl -d Ubuntu-24.04 -e bash -c \"cd /home/pavan/project/devsecurityhub && docker compose ps\")"
+      "PowerShell(wsl -d Ubuntu-24.04 -e bash -c \"cd /home/pavan/project/devsecurityhub && docker compose ps\")",
+      "Bash(find //wsl.localhost/Ubuntu-24.04/home/pavan/devops/devsecurityhub/backend -type f \\\\\\( -name \"*.js\" -o -name \"*.json\" -o -name \"*.sql\" -o -name \"*.md\" \\\\\\) | sort)",
+      "Read(///wsl.localhost/Ubuntu-24.04/home/pavan/devops/devsecurityhub/**)",
+      "Bash(tree -L 4 //wsl.localhost/Ubuntu-24.04/home/pavan/devops/devsecurityhub/backend)"
     ]
   }
 }
